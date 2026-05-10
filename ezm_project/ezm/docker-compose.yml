@@ -1,0 +1,15 @@
+services:
+  ezm:
+    build: .
+    container_name: ezm
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "5050:5050"
+    volumes:
+      - ezm_data:/data
+
+volumes:
+  ezm_data:
+

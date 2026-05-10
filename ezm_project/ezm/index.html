@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>EZM · מערכת סידור עבודה</title>
+<link rel="stylesheet" href="styles.css?v=20260510-38" />
+<link rel="manifest" href="/manifest.json" />
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+<link rel="icon" type="image/png" sizes="1024x1024" href="/EZM-icon.png" />
+<link rel="icon" type="image/png" sizes="512x512"   href="/icon-512.png" />
+<link rel="icon" type="image/png" sizes="192x192"   href="/icon-192.png" />
+<link rel="shortcut icon" href="/EZM-icon.png" />
+<meta name="theme-color" content="#F47820" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="EZM" />
+</head>
+<body>
+
+<!-- Loading -->
+<div id="loadingOverlay">
+  <div class="logo-mark">EZM</div>
+  <div class="spinner"></div>
+</div>
+
+<!-- Modal -->
+<div id="modalBackdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-header">
+      <div>
+        <div class="modal-kicker" id="modalKicker"></div>
+        <h2 class="modal-title" id="modalTitle"></h2>
+      </div>
+      <button class="modal-close" id="closeModal" aria-label="סגור">✕</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-footer" id="modalFooter"></div>
+  </div>
+</div>
+
+<div id="app">
+  <div id="menuBackdrop" hidden></div>
+
+  <!-- Sidebar -->
+  <aside id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">EZM</div>
+      <div class="logo-sub">מערכת ניהול עובדים</div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <button class="nav-item" data-view="schedule">
+        <span class="nav-icon">📅</span> סידור שבועי
+      </button>
+      <button class="nav-item" data-view="employees">
+        <span class="nav-icon">👥</span> עובדים
+        <span class="nav-badge hidden" id="pendingBadge">0</span>
+      </button>
+      <button class="nav-item" data-view="requests">
+        <span class="nav-icon">📋</span> בקשות
+        <span class="nav-badge hidden" id="requestsBadge">0</span>
+      </button>
+      <button class="nav-item" data-view="reports">
+        <span class="nav-icon">📊</span> דוחות
+      </button>
+      <div class="nav-section-label">ניהול</div>
+      <button class="nav-item" data-view="area">
+        <span class="nav-icon">🗺️</span> ניהול אזור
+      </button>
+      <button class="nav-item" data-view="network">
+        <span class="nav-icon">🏢</span> ניהול רשת
+      </button>
+      <button class="nav-item" data-view="employeePortal">
+        <span class="nav-icon">🙋</span> אזור עובד
+      </button>
+      <button class="nav-item" data-view="employeeRequests">
+        <span class="nav-icon">📝</span> הבקשות שלי
+      </button>
+      <button class="nav-item" data-view="auth">
+        <span class="nav-icon">🔑</span> כניסה
+      </button>
+      <button class="nav-item dev-nav-item" data-view="developer">
+        <span class="nav-icon">🔧</span> מפתח
+      </button>
+    </nav>
+
+    <div class="sidebar-user" id="sidebarUser" hidden>
+      <div class="user-card">
+        <div class="user-avatar" id="userAvatar">?</div>
+        <div class="user-info">
+          <div class="user-name" id="userName">—</div>
+          <div class="user-role" id="userRole">לא מחובר</div>
+        </div>
+        <button class="logout-btn" id="logoutBtn" title="יציאה">⏏</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <div id="main">
+    <header id="topbar">
+      <button class="menu-toggle" id="menuToggle" type="button" aria-label="Menu">
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
+      <span class="topbar-breadcrumb" id="topbarContext">EZM</span>
+      <span class="topbar-divider">/</span>
+      <span class="topbar-title" id="topbarTitle">כניסה</span>
+      <div class="topbar-actions" id="topbarActions"></div>
+    </header>
+
+    <div id="views">
+
+      <!-- ── Auth View ──────────────────────────────────────────────────── -->
+      <div class="view active" id="authView">
+        <div class="auth-split">
+
+          <!-- ── Form side ── -->
+          <div class="auth-form-side">
+            <div class="auth-mobile-logo">
+              <span>EZM</span>
+            </div>
+
+            <div class="auth-form-wrapper">
+              <h1 class="auth-title">ברוך הבא</h1>
+              <p class="auth-subtitle">התחברו כדי להמשיך</p>
+
+              <div class="auth-tabs">
+                <button class="auth-tab active" data-auth-tab="login">התחברות</button>
+                <button class="auth-tab" data-auth-tab="register">הרשמה</button>
+              </div>
+
+              <!-- Login Panel -->
+              <div class="auth-panel" id="loginPanel">
+                <div class="field">
+                  <label>מספר תעודת זהות</label>
+                  <div class="auth-input-wrap">
+                    <input type="text" id="loginId" placeholder="הכנס מספר תעודת זהות" maxlength="9" inputmode="numeric" />
+                    <span class="auth-input-icon">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
+                    </span>
+                  </div>
+                </div>
+                <div class="field">
+                  <label>קוד כניסה חד פעמי</label>
+                  <div class="auth-otp-row">
+                    <div class="auth-input-wrap">
+                      <input type="text" id="otpInput" placeholder="הכנס קוד שנשלח למייל" maxlength="6" inputmode="numeric" />
+                      <span class="auth-input-icon">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                      </span>
+                    </div>
+                    <button class="auth-send-code" id="sendCodeBtn" type="button">שלח קוד</button>
+                  </div>
+                </div>
+
+                <div class="auth-row-between">
+                  <label class="auth-remember">
+                    <input type="checkbox" id="rememberMe" checked />
+                    <span>זכור אותי</span>
+                  </label>
+                  <a href="#" class="auth-forgot">שכחת סיסמה?</a>
+                </div>
+                <label class="auth-role-switch" id="loginAsEmployeeWrap" hidden>
+                  <input type="checkbox" id="loginAsEmployee" />
+                  <span>
+                    <strong>היכנס כאזור עובד</strong>
+                    <small>ברירת המחדל היא כניסה כמנהל</small>
+                  </span>
+                </label>
+
+                <button class="auth-btn-primary" id="loginBtn" type="button">התחבר</button>
+                <div class="auth-note" id="authNote"></div>
+
+                <div style="text-align:center;margin-top:20px">
+                  <button class="dev-login-link" id="devLoginToggle" type="button" hidden>🔧 כניסה כמפתח</button>
+                </div>
+                <div id="devLoginPanel" hidden style="margin-top:12px;padding-top:12px;border-top:1px solid #f3f4f6">
+                  <div class="field">
+                    <label>סיסמת מפתח</label>
+                    <input type="password" id="devPassword" placeholder="הכנס סיסמת מפתח" />
+                  </div>
+                  <button class="auth-btn-primary" id="devLoginBtn" type="button">כנס כמפתח</button>
+                  <div class="auth-note" id="devNote"></div>
+                </div>
+              </div>
+
+              <!-- Register Panel -->
+              <div class="auth-panel" id="registerPanel" hidden>
+                <div class="form-grid">
+                  <div class="field">
+                    <label>שם מלא</label>
+                    <input type="text" id="regName" placeholder="ישראל ישראלי" />
+                  </div>
+                  <div class="field">
+                    <label>תעודת זהות</label>
+                    <input type="text" id="regId" placeholder="123456789" maxlength="9" inputmode="numeric" />
+                  </div>
+                  <div class="field">
+                    <label>טלפון</label>
+                    <input type="tel" id="regPhone" placeholder="050-0000000" />
+                  </div>
+                  <div class="field">
+                    <label>מייל</label>
+                    <input type="email" id="regEmail" placeholder="name@example.com" />
+                  </div>
+                  <div class="field">
+                    <label>סניף</label>
+                    <select id="regBranchSelect"></select>
+                  </div>
+                </div>
+                <button class="auth-btn-primary" id="submitRegBtn" type="button">הגש הרשמה</button>
+                <div class="auth-note" id="regNote">ההרשמה תועבר לאישור מנהל הסניף.</div>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- ── Promo side ── -->
+          <div class="auth-promo-side">
+            <div class="auth-promo-inner">
+              <div class="auth-promo-icon">
+                <svg width="58" height="58" viewBox="0 0 58 58" fill="none"><rect width="58" height="58" rx="16" fill="rgba(255,255,255,0.18)"/><rect x="11" y="15" width="36" height="30" rx="4.5" stroke="white" stroke-width="2.5" fill="none"/><path d="M11 24h36" stroke="white" stroke-width="2.5"/><circle cx="21" cy="12" r="3" stroke="white" stroke-width="2.2"/><circle cx="37" cy="12" r="3" stroke="white" stroke-width="2.2"/><rect x="16" y="30" width="8" height="4" rx="2" fill="rgba(255,255,255,0.7)"/><rect x="25" y="30" width="8" height="4" rx="2" fill="rgba(255,255,255,0.9)"/><rect x="16" y="37" width="8" height="4" rx="2" fill="rgba(255,255,255,0.5)"/><rect x="34" y="30" width="8" height="4" rx="2" fill="rgba(255,255,255,0.6)"/></svg>
+              </div>
+              <h2 class="auth-promo-title">ניהול משמרות חכם<br>במקום אחד</h2>
+              <p class="auth-promo-sub">תכנון, שליטה וסנכרון צוותים בזמן אמת</p>
+
+              <div class="auth-cal-mockup">
+                <div class="cal-head">
+                  <span></span><span>א'</span><span>ב'</span><span>ג'</span><span>ד'</span><span>ה'</span>
+                </div>
+                <div class="cal-rows">
+                  <div class="cal-r"><span class="cal-t">09:00</span><div class="cal-g"><div></div><div></div><div></div><div></div><div></div></div></div>
+                  <div class="cal-r"><span class="cal-t">10:00</span><div class="cal-g"><div></div><div class="cs cs-green cs-span3"></div><div></div></div></div>
+                  <div class="cal-r"><span class="cal-t">11:00</span><div class="cal-g"><div></div><div class="cs cs-peach cs-span2"></div><div></div><div></div></div></div>
+                  <div class="cal-r"><span class="cal-t">12:00</span><div class="cal-g"><div></div><div></div><div class="cs cs-yellow cs-span2"></div><div></div></div></div>
+                  <div class="cal-r"><span class="cal-t">13:00</span><div class="cal-g"><div class="cs cs-blue cs-span2"></div><div></div><div></div><div></div></div></div>
+                  <div class="cal-r"><span class="cal-t">14:00</span><div class="cal-g"><div></div><div></div><div class="cs cs-purple cs-span2"></div><div></div></div></div>
+                  <div class="cal-r"><span class="cal-t">15:00</span><div class="cal-g"><div></div><div></div><div></div><div></div><div></div></div></div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- ── Schedule View ──────────────────────────────────────────────── -->
+      <div class="view" id="scheduleView">
+        <div class="page-header">
+          <div class="page-header-text">
+            <h1 id="scheduleBranchTitle">סידור שבועי</h1>
+            <p id="scheduleWeekTitle">בחר שבוע להצגה</p>
+          </div>
+          <div class="page-header-actions" id="scheduleActions"></div>
+        </div>
+
+        <div class="schedule-layout">
+          <div class="week-area">
+            <div class="week-nav">
+              <button class="btn btn-ghost btn-sm btn-icon" id="prevWeek" title="שבוע קודם">→</button>
+              <h2 id="weekRange">—</h2>
+              <button class="btn btn-ghost btn-sm btn-icon" id="nextWeek" title="שבוע הבא">←</button>
+              <div style="margin-right:auto;display:flex;gap:8px;align-items:center">
+                <span class="tag" id="scheduleStatusTag"></span>
+                <button class="btn btn-ghost btn-sm hidden" id="publishBtn" type="button">פרסם</button>
+                <button class="btn btn-ghost btn-sm hidden" id="closeWeekBtn" type="button">סגור שבוע</button>
+              </div>
+            </div>
+            <div class="schedule-date-strip" id="scheduleDateStrip"></div>
+            <div id="weekGrid" class="week-grid"></div>
+          </div>
+
+          <!-- Shift drawer -->
+          <div class="shift-drawer">
+            <div class="drawer-header">
+              <div style="display:flex;align-items:center;gap:8px">
+                <div class="dot" id="drawerDot"></div>
+                <h3 id="drawerTitle">בחר משמרת</h3>
+              </div>
+              <div class="drawer-meta">
+                <button class="drawer-hours-btn" id="drawerHours" type="button"></button>
+                <span id="drawerStatusTag" class="tag"></span>
+              </div>
+            </div>
+
+            <div class="drawer-body">
+              <div class="drawer-section">
+                <div class="drawer-section-title">
+                  <span>משובצים <span id="assignedTotal">0</span></span>
+                </div>
+                <div id="assignedList"></div>
+              </div>
+              <div class="drawer-section">
+                <div class="drawer-section-title">זמינים לשיבוץ</div>
+                <div id="availableList"></div>
+              </div>
+              <div class="drawer-section hidden" id="reinforcementSection">
+                <div class="drawer-section-title">תגבור מסניפים אחרים</div>
+                <div id="reinforcementCandidates"></div>
+              </div>
+            </div>
+
+            <div class="drawer-shortage hidden" id="drawerShortage">
+              <span id="shortageText"></span>
+            </div>
+
+            <div class="drawer-footer">
+              <button class="btn btn-ghost btn-sm" id="markStaffedBtn" type="button">סמן מאויש</button>
+              <button class="btn btn-ghost btn-sm" id="toggleShortageBtn" type="button">דווח חוסר</button>
+              <button class="btn btn-ghost btn-sm" id="addReinforcementBtn" type="button">כ״א</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Employees View ─────────────────────────────────────────────── -->
+      <div class="view" id="employeesView">
+        <div class="employees-layout">
+          <!-- List -->
+          <div class="employee-list-panel">
+            <div class="employee-list-header">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <h3>עובדים</h3>
+                <button class="btn btn-primary btn-sm" id="addEmployeeBtn" type="button">+ הוסף</button>
+              </div>
+              <div class="search-bar">
+                <input type="text" id="employeeSearch" placeholder="חיפוש לפי שם או ת.ז." />
+              </div>
+              <div style="display:flex;gap:6px">
+                <select id="rankFilter" style="flex:1">
+                  <option value="all">כל הדרגות</option>
+                  <option value="managers">מנהלים</option>
+                  <option value="מוכרן">מוכרן</option>
+                  <option value="קופאי">קופאי</option>
+                </select>
+                <select id="statusFilter" style="flex:1">
+                  <option value="active">פעיל</option>
+                  <option value="inactive">מושהה</option>
+                  <option value="all">הכל</option>
+                </select>
+              </div>
+              <button class="pending-filter-btn" id="pendingEmployeesBtn" type="button">
+                ממתינים <span id="pendingEmployeesCount" hidden>0</span>
+              </button>
+            </div>
+            <div class="employee-list-body" id="employeeList"></div>
+          </div>
+
+          <!-- Detail -->
+          <div class="employee-detail" id="employeeDetail">
+            <div class="empty-state">
+              <div class="empty-icon">👥</div>
+              <div>בחר עובד מהרשימה</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Requests View ──────────────────────────────────────────────── -->
+      <div class="view" id="requestsView">
+        <div class="page-header">
+          <div class="page-header-text"><h1>בקשות ושינויים</h1><p>ניהול בקשות שעות, חילופים ויציאות</p></div>
+          <div class="page-header-actions">
+            <label class="inline-select-label" for="requestsBranchSelect">סניף</label>
+            <select id="requestsBranchSelect" class="requests-branch-select"></select>
+          </div>
+        </div>
+        <div class="requests-layout">
+          <div class="card notification-settings-card">
+            <div class="card-header"><h3>הגדרות תזכורות מייל</h3></div>
+            <div class="card-body">
+              <label class="check-inline notification-toggle">
+                <input type="checkbox" id="availabilityReminderEnabled" />
+                <span>שלח תזכורת לעובדים שלא הגישו זמינות</span>
+              </label>
+              <div class="notification-slots" id="availabilityReminderSlots"></div>
+              <button class="btn btn-ghost btn-sm" id="addReminderSlotBtn" type="button">+ הוסף זמן תזכורת</button>
+              <div class="notification-digest-row">
+                <label class="check-inline">
+                  <input type="checkbox" id="managerDigestEnabled" />
+                  <span>שלח למנהלים תקציר בקשות פתוחות</span>
+                </label>
+                <input type="time" id="managerDigestTime" />
+              </div>
+              <div class="notification-settings-actions">
+                <button class="btn btn-primary btn-sm" id="saveNotificationSettingsBtn" type="button">שמור הגדרות</button>
+                <span class="text-muted" id="notificationSettingsNote"></span>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h3>⏰ שינויי שעות</h3></div>
+            <div id="timeRequests"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h3>🔄 חילופים ויציאות</h3></div>
+            <div id="swapRequests"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h3>בקשות יציאה ממשמרת</h3></div>
+            <div id="exitRequests"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h3>בקשות מונית שבת</h3></div>
+            <div id="taxiRequests"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h3>⚠️ דיווחי חוסר</h3></div>
+            <div id="shortageRequests"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Reports View ───────────────────────────────────────────────── -->
+      <div class="view" id="reportsView">
+        <div class="page-header">
+          <div class="page-header-text"><h1>דוח סוף יום</h1><p>מכירות, יעדים ועלויות שכר</p></div>
+        </div>
+        <div class="reports-layout">
+          <div class="card">
+            <div class="card-header">
+              <h3>הזנת נתוני יום</h3>
+              <select id="reportBranchSelect" style="margin-right:auto;width:auto"></select>
+            </div>
+            <div class="card-body">
+              <div class="report-form-grid">
+                <div class="field"><label>תאריך</label><input type="date" id="reportDate" /></div>
+                <div class="field"><label>יעד מכירות (₪)</label><input type="number" id="salesTarget" placeholder="0" /></div>
+                <div class="field"><label>מכירות בפועל (₪)</label><input type="number" id="actualSales" placeholder="0" /></div>
+                <div class="field"><label>ממוצע עסקה (₪)</label><input type="number" id="avgTransaction" placeholder="0" /></div>
+                <div class="field"><label>ממוצע פריטים</label><input type="number" id="avgItems" placeholder="0" step="0.1" /></div>
+              </div>
+              <div class="report-kpis" id="reportKpis">
+                <div class="kpi-card"><div class="kpi-value" id="kpiTargetPct">—</div><div class="kpi-label">% יעד</div></div>
+                <div class="kpi-card"><div class="kpi-value" id="kpiLaborPct">—</div><div class="kpi-label">% עלות שכר</div></div>
+                <div class="kpi-card"><div class="kpi-value" id="kpiStatus">—</div><div class="kpi-label">סטטוס</div></div>
+              </div>
+              <div class="mt-3">
+                <button class="btn btn-primary" id="saveReportBtn" type="button">שמור דוח</button>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h3>היסטוריית דוחות</h3></div>
+            <div id="reportHistory"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Area View ──────────────────────────────────────────────────── -->
+      <div class="view" id="areaView">
+        <div class="page-header">
+          <div class="page-header-text"><h1>ניהול אזור</h1><p>סקירת סניפים וחוסרים באזור</p></div>
+        </div>
+        <div class="area-layout">
+          <div class="card">
+            <div class="card-header">
+              <h3>סניפי האזור</h3>
+            </div>
+            <div class="branch-grid card-body" id="areaBranches"></div>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <h3>⚠️ חוסרים פתוחים</h3>
+              <select id="shortageFilter" style="margin-right:auto;width:auto">
+                <option value="all">הכל</option>
+                <option value="open">פתוח (לא נשלחה בקשה)</option>
+                <option value="pending">בטיפול (נשלחה בקשה)</option>
+                <option value="covered">מכוסה</option>
+              </select>
+            </div>
+            <div id="areaShortages"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Network View ───────────────────────────────────────────────── -->
+      <div class="view" id="networkView">
+        <div class="page-header">
+          <div class="page-header-text"><h1>ניהול רשת</h1><p>סניפים, מנהלים ומבנה ארגוני</p></div>
+          <div class="page-header-actions">
+            <button class="btn btn-ghost btn-sm" id="addBranchBtn" type="button">+ סניף</button>
+          </div>
+        </div>
+        <div class="network-layout">
+          <div class="card">
+            <div class="card-header"><h3>🏪 סניפים</h3></div>
+            <div id="networkBranches"></div>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <h3>👔 מנהלים</h3>
+              <button class="btn btn-ghost btn-xs ml-auto" id="addManagerBtn" type="button">+ מנהל</button>
+            </div>
+            <div id="managerList"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h3>📋 יומן פעילות</h3></div>
+            <div id="auditLog"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Employee Portal View ───────────────────────────────────────── -->
+      <div class="view" id="employeePortalView">
+
+        <!-- Hero header with gradient -->
+        <div class="ep-hero">
+          <div class="ep-hero-top">
+            <div class="ep-hero-title">
+              <span class="ep-hero-greeting" id="portalHeroGreeting">היי,</span>
+              <span class="ep-hero-sub">הלוז שלך</span>
+            </div>
+            <button class="ep-bell-btn hidden" id="portalBellBtn" type="button" aria-label="בקשות תגבור">
+              🔔<span class="ep-bell-badge" id="portalBellBadge"></span>
+            </button>
+            <button class="employee-logout-btn" id="portalLogoutBtn" type="button" aria-label="יציאה">×</button>
+          </div>
+          <div class="ep-branch-row" id="portalBranchBar"></div>
+          <div class="ep-day-headline">
+            <button class="ep-nav-arrow" id="portalPrevWeek" type="button" aria-label="שבוע קודם">‹</button>
+            <div class="ep-day-center">
+              <div class="ep-date-big" id="portalDayHeadline"></div>
+              <div class="ep-day-name" id="portalDayName"></div>
+            </div>
+            <button class="ep-nav-arrow" id="portalNextWeek" type="button" aria-label="שבוע הבא">›</button>
+          </div>
+          <div class="ep-day-strip" id="portalDateStrip"></div>
+        </div>
+
+        <!-- Content area -->
+        <div class="ep-content">
+          <div class="portal-reinforcement-alerts hidden" id="portalReinforcementAlerts"></div>
+          <div id="portalGrid"></div>
+        </div>
+      </div>
+
+      <div class="view" id="employeeRequestsView">
+        <div class="page-header">
+          <div class="page-header-text"><h1 id="reqViewTitle">הבקשות שלי</h1><p id="reqViewSub">סטטוס בקשות שעות, היעדרות וחילוף</p></div>
+        </div>
+        <div class="portal-layout">
+          <div class="card">
+            <div class="card-header"><h3>הבקשות שלי</h3></div>
+            <div id="portalRequestsList"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Developer View ─────────────────────────────────────────────── -->
+      <div class="view" id="developerView">
+        <div class="dev-topbar">
+          <span class="dev-topbar-title">⌨️ EZM Developer Console</span>
+          <button class="dev-topbar-btn" id="devRefreshBtn">↻ רענן</button>
+          <button class="dev-topbar-btn dev-topbar-logout" id="devLogoutBtn">יציאה</button>
+        </div>
+        <div class="dev-layout">
+          <div id="devStatsGrid" class="dev-stats-grid"></div>
+          <div class="dev-card">
+            <div class="dev-card-head">
+              <span>🏢 סניפים</span>
+              <span class="dev-card-sub" id="devBranchSubtitle"></span>
+            </div>
+            <div class="dev-table-wrap" id="devBranchesTable"></div>
+          </div>
+          <div class="dev-card">
+            <div class="dev-card-head">🗄️ Database</div>
+            <div class="dev-tabs" id="devDbTabs"></div>
+            <div class="dev-db-content" id="devDbContent"></div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /views -->
+  </div><!-- /main -->
+
+  <nav class="employee-bottom-nav" id="employeeBottomNav" hidden>
+    <button type="button" data-view="employeePortal">לוח משמרות</button>
+    <button type="button" data-view="employeeRequests">הבקשות שלי <span class="bottom-nav-badge" id="employeeRequestsBadge" hidden>0</span></button>
+    <button type="button" data-view="reports">דוח סוף יום</button>
+  </nav>
+</div><!-- /app -->
+
+<script src="app.js?v=20260510-38"></script>
+</body>
+</html>

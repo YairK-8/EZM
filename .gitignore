@@ -1,0 +1,32 @@
+# Workspace / editor state
+.vs/
+.claude/
+.vscode/
+.idea/
+
+# EZM secrets and runtime data
+ezm_project/ezm/.env
+ezm_project/ezm/.env.*
+!ezm_project/ezm/.env.example
+ezm_project/ezm/data/
+ezm_project/ezm/*.sqlite3
+ezm_project/ezm/*.sqlite3-shm
+ezm_project/ezm/*.sqlite3-wal
+
+# Generated or unused image drafts
+ezm_project/ezm/ChatGPT Image*.png
+ezm_project/ezm/apple-touch-icon1.png
+ezm_project/ezm/apple-touch-icon2.png
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS / logs
+.DS_Store
+Thumbs.db
+*.log
+
