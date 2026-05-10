@@ -2979,7 +2979,7 @@ function renderEpDayStrip(ws, weekData, activeDayIdx, reinforcementRequests = []
   }
   requestAnimationFrame(() => {
     strip.querySelector(`.ep-day-pill[data-day-idx="${activeDayIdx}"]`)?.scrollIntoView({
-      behavior: "smooth",
+      behavior: "auto",
       inline: "center",
       block: "nearest",
     });
@@ -3002,7 +3002,7 @@ function setPortalActiveDay(ws, idx, shouldScroll = true) {
   if (h) h.textContent = `${d2.getDate()} ב${MONTHS[d2.getMonth()]} ${d2.getFullYear()}`;
   if (n) n.textContent = `יום ${DAY_LABELS[dk2]}`;
 
-  centerPortalDayPill(idx, "smooth");
+  centerPortalDayPill(idx, shouldScroll ? "smooth" : "auto");
   if (shouldScroll) centerPortalDaySlide(idx, "smooth");
   requestAnimationFrame(() => updateEpDayStripDepth());
 }
@@ -3135,33 +3135,6 @@ function renderEpDayContent(ws, dk, dayIdx, weekData, reinforcementRequests, tax
         }
       });
     }, { passive: true });
-    // Observe which slide is most centred and update active state
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        entry.target.classList.toggle("ep-slide-active", entry.isIntersecting && entry.intersectionRatio >= 0.6);
-        if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
-          const idx = parseInt(entry.target.dataset.dayIdx);
-          if (idx !== window._portalSelectedDay) {
-            setPortalActiveDay(ws, idx, false);
-            return;
-            window._portalSelectedDay = idx;
-            // Update pills strip
-            document.querySelectorAll(".ep-day-pill").forEach((p, pi) => {
-              p.classList.toggle("active", pi === idx);
-            });
-            updateEpDayStripDepth(idx);
-            // Update headline
-            const d2  = parseIso(addDays(ws, idx));
-            const dk2 = DAY_KEYS[idx];
-            const h   = document.getElementById("portalDayHeadline");
-            const n   = document.getElementById("portalDayName");
-            if (h) h.textContent = `${d2.getDate()} ב${MONTHS[d2.getMonth()]} ${d2.getFullYear()}`;
-            if (n) n.textContent = `יום ${DAY_LABELS[dk2]}`;
-          }
-        }
-      });
-    }, { root: carousel, threshold: 0.6 });
-    carousel.querySelectorAll(".ep-day-slide").forEach(s => observer.observe(s));
   });
 }
 

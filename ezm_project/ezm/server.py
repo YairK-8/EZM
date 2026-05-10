@@ -2243,6 +2243,7 @@ class EZMHandler(SimpleHTTPRequestHandler):
                 req = conn.execute("SELECT * FROM change_requests WHERE id=?", (rid,)).fetchone()
                 if not req:
                     json_response(self, 404, {"error": "not_found"}); return
+                old_status = req["status"]
                 branch = conn.execute("""
                     SELECT w.branch_id, w.status AS week_status
                     FROM shifts s JOIN weeks w ON w.id=s.week_id
