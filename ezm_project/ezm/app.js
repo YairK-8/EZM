@@ -3275,7 +3275,7 @@ function buildModeB(slide, ws, dk, d, holiday, morningShift, eveningShift,
         const checked = !!myAvail;
         actionHtml = `<div class="ep-avail-toggle${checked ? " checked" : ""}" data-avail-toggle>
           <div class="ep-checkbox-mark">${checked ? "✓" : ""}</div>
-          <span>הגש זמינות</span>
+          <span>${checked ? "זמינות נשלחה" : "הגש זמינות"}</span>
         </div>`;
       }
 
@@ -3317,6 +3317,8 @@ function buildModeB(slide, ws, dk, d, holiday, morningShift, eveningShift,
           this.classList.toggle("checked", !isChecked);
           const mark = this.querySelector(".ep-checkbox-mark");
           mark.textContent = !isChecked ? "✓" : "";
+          const label = this.querySelector("span");
+          if (label) label.textContent = !isChecked ? "זמינות נשלחה" : "הגש זמינות";
         } catch(e) {
           if (e.status === 409 && e.data?.error === "availability_conflict") {
             alert("יש כבר זמינות או שיבוץ בסניף אחר באותו זמן");
@@ -3348,8 +3350,8 @@ function buildModeA(slide, ws, dk, d, holiday, morningShift, eveningShift, myMor
   card.innerHTML = `
     <div class="ep-empty-state">
       <div class="ep-empty-icon">📅</div>
-      <div class="ep-empty-title">טרם הוגשה זמינות ליום זה</div>
-      <div class="ep-empty-sub">בחר/י את המשמרות שבהן את/ה זמין/ה לעבוד</div>
+      <div class="ep-empty-title">${selectedCount ? "זמינות נשלחה ליום זה" : "טרם הוגשה זמינות ליום זה"}</div>
+      <div class="ep-empty-sub">${selectedCount ? "המשמרות הירוקות כבר נשלחו למנהל" : "בחר/י את המשמרות שבהן את/ה זמין/ה לעבוד"}</div>
     </div>
     <div class="ep-shifts-section">
       <div class="ep-shifts-label">
@@ -3358,7 +3360,7 @@ function buildModeA(slide, ws, dk, d, holiday, morningShift, eveningShift, myMor
       </div>
       <div id="epShiftCheckboxes">
         ${hasMorning ? `
-        <div class="ep-shift-checkbox${morningSelected ? " selected" : ""}" data-slot="morning">
+        <div class="ep-shift-checkbox${morningSelected ? " selected submitted" : ""}" data-slot="morning">
           <div class="ep-shift-checkbox-left">
             <div class="ep-shift-checkbox-icon morning">☀️</div>
             <div class="ep-shift-checkbox-info">
@@ -3366,10 +3368,11 @@ function buildModeA(slide, ws, dk, d, holiday, morningShift, eveningShift, myMor
               <div class="ep-shift-checkbox-hours"><span>🕐</span>${morningShift.hours || ""}</div>
             </div>
           </div>
+          <span class="ep-submitted-label">נשלחה</span>
           <div class="ep-checkbox-mark">${morningSelected ? "✓" : ""}</div>
         </div>` : ""}
         ${hasEvening ? `
-        <div class="ep-shift-checkbox${eveningSelected ? " selected" : ""}" data-slot="evening">
+        <div class="ep-shift-checkbox${eveningSelected ? " selected submitted" : ""}" data-slot="evening">
           <div class="ep-shift-checkbox-left">
             <div class="ep-shift-checkbox-icon evening">🌙</div>
             <div class="ep-shift-checkbox-info">
@@ -3377,6 +3380,7 @@ function buildModeA(slide, ws, dk, d, holiday, morningShift, eveningShift, myMor
               <div class="ep-shift-checkbox-hours"><span>🕐</span>${eveningShift.hours || ""}</div>
             </div>
           </div>
+          <span class="ep-submitted-label">נשלחה</span>
           <div class="ep-checkbox-mark">${eveningSelected ? "✓" : ""}</div>
         </div>` : ""}
         ${!hasMorning && !hasEvening ? `<div style="text-align:center;padding:20px;color:var(--text3);font-size:.8rem;">אין משמרות מוגדרות ליום זה עדיין.</div>` : ""}
@@ -3416,6 +3420,7 @@ function buildModeA(slide, ws, dk, d, holiday, morningShift, eveningShift, myMor
       const slot = box.dataset.slot;
       selections[slot] = !selections[slot];
       box.classList.toggle("selected", selections[slot]);
+      box.classList.toggle("submitted", (slot === "morning" ? hadMorning : hadEvening) && selections[slot]);
       box.querySelector(".ep-checkbox-mark").textContent = selections[slot] ? "✓" : "";
       refreshSendBtn();
     });

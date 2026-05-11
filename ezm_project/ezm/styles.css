@@ -3507,6 +3507,32 @@ body.employee-mode #employeePortalView.active {
   border-color: #ea580c;
   background: rgba(234,88,12,.07);
 }
+.ep-shift-checkbox.submitted {
+  border-color: rgba(22,163,74,.42);
+  background:
+    linear-gradient(145deg, rgba(220,252,231,.88), rgba(240,253,244,.58)),
+    radial-gradient(circle at 18% 12%, rgba(255,255,255,.72), transparent 34%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.78),
+    0 10px 22px rgba(22,163,74,.08);
+}
+.ep-shift-checkbox.submitted .ep-shift-checkbox-name {
+  color: #166534;
+}
+.ep-submitted-label {
+  display: none;
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: .68rem;
+  font-weight: 800;
+  color: #15803d;
+  background: rgba(220,252,231,.86);
+  border: 1px solid rgba(22,163,74,.16);
+}
+.ep-shift-checkbox.submitted .ep-submitted-label {
+  display: inline-flex;
+}
 .ep-shift-checkbox-left {
   display: flex;
   align-items: center;
@@ -3550,6 +3576,11 @@ body.employee-mode #employeePortalView.active {
 .ep-shift-checkbox.selected .ep-checkbox-mark {
   background: #ea580c;
   border-color: #ea580c;
+  color: #fff;
+}
+.ep-shift-checkbox.submitted .ep-checkbox-mark {
+  background: #16a34a;
+  border-color: #16a34a;
   color: #fff;
 }
 .ep-avail-info {
@@ -3912,13 +3943,13 @@ body.employee-mode .ep-content {
   flex-shrink: 0;
 }
 .ep-avail-toggle.checked {
-  border-color: #ea580c;
-  background: rgba(234,88,12,.07);
-  color: #ea580c;
+  border-color: rgba(22,163,74,.38);
+  background: rgba(220,252,231,.70);
+  color: #15803d;
 }
 .ep-avail-toggle.checked .ep-checkbox-mark {
-  background: #ea580c;
-  border-color: #ea580c;
+  background: #16a34a;
+  border-color: #16a34a;
   color: #fff;
 }
 
@@ -4667,6 +4698,27 @@ body.employee-mode .employee-bottom-nav button.active {
     linear-gradient(145deg, rgba(255,255,255,.92) 0%, rgba(255,255,255,.72) 48%, rgba(255,255,255,.58) 100%),
     radial-gradient(circle at 20% 10%, rgba(255,255,255,.78), transparent 36%),
     radial-gradient(circle at 76% 86%, rgba(244,120,32,.12), transparent 42%) !important;
+}
+
+body.employee-mode .ep-shift-checkbox.submitted,
+body.employee-mode .ep-avail-toggle.checked {
+  border-color: rgba(22,163,74,.36) !important;
+  color: #15803d;
+  background:
+    linear-gradient(145deg, rgba(240,253,244,.78) 0%, rgba(220,252,231,.50) 48%, rgba(255,255,255,.30) 100%),
+    radial-gradient(circle at 18% 10%, rgba(255,255,255,.76), transparent 34%),
+    radial-gradient(circle at 84% 86%, rgba(22,163,74,.16), transparent 38%) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.86),
+    inset 0 -12px 28px rgba(22,163,74,.06),
+    0 12px 28px rgba(22,163,74,.10);
+}
+
+body.employee-mode .ep-shift-checkbox.submitted .ep-checkbox-mark,
+body.employee-mode .ep-avail-toggle.checked .ep-checkbox-mark {
+  background: #16a34a;
+  border-color: #16a34a;
+  color: #fff;
 }
 
 body.employee-mode .ep-coworker-avatar--reinf {
