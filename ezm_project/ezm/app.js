@@ -3162,6 +3162,7 @@ function buildModeB(slide, ws, dk, d, holiday, morningShift, eveningShift,
   isAssignedMorning, isAssignedEvening, weekData, taxiRequests = []) {
 
   const canPull = weekData?.status === "draft";
+  const isClosedWeek = weekData?.status === "closed";
 
   const card = document.createElement("div");
   card.className = "ep-day-card";
@@ -3257,7 +3258,16 @@ function buildModeB(slide, ws, dk, d, holiday, morningShift, eveningShift,
       const myAvail = displayShift?.availability?.find(a => a.userId === app.user.id);
 
       let actionHtml = "";
-      if (isAssigned) {
+      if (isClosedWeek && isAssigned) {
+        actionHtml = `<div class="ep-shift-action-row">
+          <div class="ep-shift-action-main">
+            <button class="ep-req-btn" type="button" data-open-requests>📋 בקשות</button>
+          </div>
+          ${taxiIndicatorHtml}
+        </div>`;
+      } else if (isClosedWeek) {
+        actionHtml = "";
+      } else if (isAssigned) {
         actionHtml = `<div class="ep-shift-action-row">
           <div class="ep-shift-action-main">
             <button class="ep-req-btn" type="button" data-open-requests>📋 בקשות</button>
@@ -3301,7 +3311,7 @@ function buildModeB(slide, ws, dk, d, holiday, morningShift, eveningShift,
         id: reinf.shiftId, dayKey: reinf.shift?.dayKey,
         slot: reinf.shift?.slot, hours: reinf.shift?.hours,
       } : null);
-      shiftDiv.querySelector("[data-open-requests]")?.addEventListener("click", () => openShiftRequestMenu(rs, canPull && !!displayShift && !displayShift.isReinforcementOnly));
+      shiftDiv.querySelector("[data-open-requests]")?.addEventListener("click", () => openShiftRequestMenu(rs, canPull && !!displayShift && !displayShift.isReinforcementOnly, isClosedWeek));
       shiftDiv.querySelector("[data-cancel-reinf]")?.addEventListener("click", () => answerReinforcementRequest(reinf.id, "rejected"));
       shiftDiv.querySelector("[data-answer-approved]")?.addEventListener("click", () => answerReinforcementRequest(reinf.id, "approved"));
       shiftDiv.querySelector("[data-answer-rejected]")?.addEventListener("click", () => answerReinforcementRequest(reinf.id, "rejected"));
@@ -3322,6 +3332,8 @@ function buildModeB(slide, ws, dk, d, holiday, morningShift, eveningShift,
         } catch(e) {
           if (e.status === 409 && e.data?.error === "availability_conflict") {
             alert("יש כבר זמינות או שיבוץ בסניף אחר באותו זמן");
+          } else if (e.status === 409 && e.data?.error === "week_locked") {
+            alert("השבוע נסגר ולכן לא ניתן לשנות זמינות.");
           } else {
             alert("שגיאה בהגשת זמינות");
           }
@@ -3829,7 +3841,7 @@ function renderPortalBranchBar() {
   });
 }
 
-function openShiftRequestMenu(shift, canPullAvailability) {
+function openShiftRequestMenu(shift, canPullAvailability, hoursOnly = false) {
   const label = shift.slot === "morning" ? "בוקר" : "ערב";
   modal({
     kicker: "בקשות",
@@ -3837,9 +3849,10 @@ function openShiftRequestMenu(shift, canPullAvailability) {
     body: `
       <div class="portal-request-menu">
         <button class="btn btn-ghost" type="button" data-request-type="hours">עדכון שעות</button>
+        ${hoursOnly ? "" : `
         <button class="btn btn-ghost" type="button" data-request-type="exit">לא יכול להגיע</button>
         <button class="btn btn-ghost" type="button" data-request-type="swap">מצאתי מחליף</button>
-        ${canPullAvailability ? `<button class="btn btn-danger" type="button" data-pull-availability>בטל זמינות</button>` : ""}
+        ${canPullAvailability ? `<button class="btn btn-danger" type="button" data-pull-availability>בטל זמינות</button>` : ""}`}
       </div>`,
     footer: `<button class="btn btn-ghost" id="cancelModalBtn">סגור</button>`
   });
@@ -3937,7 +3950,13 @@ async function openEmployeeRequestModal(type, preferredShiftId = null, preferred
     try {
       await api("POST", "/api/requests", body);
       closeModal();
-    } catch (e) { alert("שגיאה בשליחת בקשה"); }
+    } catch (e) {
+      if (e.status === 409 && e.data?.error === "week_locked") {
+        alert("השבוע נסגר. ניתן לשלוח רק בקשת עדכון שעות.");
+      } else {
+        alert("שגיאה בשליחת בקשה");
+      }
+    }
   });
   document.getElementById("cancelModalBtn").addEventListener("click", closeModal);
 }

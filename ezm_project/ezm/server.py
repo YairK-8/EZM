@@ -1866,12 +1866,15 @@ class EZMHandler(SimpleHTTPRequestHandler):
                         json_response(self, 403, {"error": "forbidden"})
                         return
                 cur_shift = conn.execute("""
-                    SELECT s.id, s.day_key, s.slot, w.week_start, w.branch_id
+                    SELECT s.id, s.day_key, s.slot, w.week_start, w.branch_id, w.status AS week_status
                     FROM shifts s JOIN weeks w ON w.id=s.week_id
                     WHERE s.id=?
                 """, (shift_id,)).fetchone()
                 if not cur_shift:
                     json_response(self, 404, {"error": "shift_not_found"})
+                    return
+                if cur_shift["week_status"] == "closed":
+                    json_response(self, 409, {"error": "week_locked"})
                     return
                 existing = conn.execute("SELECT id FROM shift_availability WHERE shift_id=? AND user_id=?", (shift_id, auth["uid"])).fetchone()
                 if existing:
@@ -1988,7 +1991,7 @@ class EZMHandler(SimpleHTTPRequestHandler):
             with db() as conn:
                 shift_id = int(body.get("shiftId",0))
                 branch = conn.execute("""
-                    SELECT w.branch_id FROM shifts s JOIN weeks w ON w.id=s.week_id WHERE s.id=?
+                    SELECT w.branch_id, w.status AS week_status FROM shifts s JOIN weeks w ON w.id=s.week_id WHERE s.id=?
                 """, (shift_id,)).fetchone()
                 assigned_to_shift = conn.execute(
                     "SELECT 1 FROM shift_assignments WHERE shift_id=? AND user_id=?",
@@ -1996,6 +1999,9 @@ class EZMHandler(SimpleHTTPRequestHandler):
                 ).fetchone()
                 if not branch or not (can_access_branch(conn, auth, branch["branch_id"]) or assigned_to_shift):
                     json_response(self, 403, {"error": "forbidden"})
+                    return
+                if branch["week_status"] == "closed" and cur_type != "hours":
+                    json_response(self, 409, {"error": "week_locked"})
                     return
                 requester_id = auth["uid"]
                 if cur_type == "reinforcement":
