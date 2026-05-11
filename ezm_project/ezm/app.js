@@ -658,7 +658,7 @@ function renderDevStats(s) {
     </div>
     <div class="dv-row dv-row-bot">
       ${metricCard(fmtBytes(s.dbSizeBytes), "גודל DB", "#cdd6f4")}
-      ${metricCard((s.emailsToday || 0).toLocaleString(), "מיילים שנשלחו היום", "#a6e3a1", `${s.emailsFailedToday || 0} שליחות נכשלו היום`)}
+      ${metricCard((s.emailsToday || 0).toLocaleString(), "מיילים היום", "#a6e3a1", `כולל קודי כניסה וסיסמאות זיהוי · ${s.emailsFailedToday || 0} שליחות נכשלו היום`)}
       ${metricCard(`${s.p99Ms}ms`, "P99 זמן תגובה", msColor)}
       ${metricCard(s.errors, "סה״כ שגיאות", s.errors > 0 ? "#f38ba8" : "#a6e3a1")}
       ${metricCard(s.blockedBranches, "סניפים חסומים", s.blockedBranches > 0 ? "#f9e2af" : "#a6e3a1")}

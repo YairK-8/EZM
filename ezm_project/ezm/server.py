@@ -802,14 +802,18 @@ def send_otp_email(to_email: str, code: str) -> None:
     msg["From"] = sender
     msg["To"] = to_email
     msg.set_content(f"קוד הכניסה החד פעמי שלך: {code}\nתקף ל-{OTP_TTL_SECONDS // 60} דקות.")
-    smtp_cls = smtplib.SMTP_SSL if use_ssl else smtplib.SMTP
-    with smtp_cls(host, port, timeout=timeout) as smtp:
-        if use_tls:
-            smtp.starttls()
-        if username and password:
-            smtp.login(username, password)
-        smtp.send_message(msg)
-    log_email_event("otp", to_email, msg["Subject"], "sent")
+    try:
+        smtp_cls = smtplib.SMTP_SSL if use_ssl else smtplib.SMTP
+        with smtp_cls(host, port, timeout=timeout) as smtp:
+            if use_tls:
+                smtp.starttls()
+            if username and password:
+                smtp.login(username, password)
+            smtp.send_message(msg)
+        log_email_event("otp", to_email, msg["Subject"], "sent")
+    except Exception:
+        log_email_event("otp", to_email, msg["Subject"], "failed")
+        raise
 
 
 def send_plain_email(to_email: str, subject: str, body: str) -> bool:
