@@ -59,4 +59,17 @@ To inspect volumes:
 docker volume ls
 ```
 
-To back up the SQLite database, stop writes first or copy from a consistent snapshot of the volume.
+## Backups
+
+Create a consistent SQLite backup from the running Docker container:
+
+```bash
+./scripts/backup-ezm.sh
+```
+
+By default, backups are written to `~/ezm-backups` and only the newest 90 files are kept.
+You can override defaults:
+
+```bash
+BACKUP_DIR=/path/to/backups KEEP_BACKUPS=120 ./scripts/backup-ezm.sh
+```
