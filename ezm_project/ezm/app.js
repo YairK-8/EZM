@@ -658,6 +658,7 @@ function renderDevStats(s) {
     </div>
     <div class="dv-row dv-row-bot">
       ${metricCard(fmtBytes(s.dbSizeBytes), "גודל DB", "#cdd6f4")}
+      ${metricCard((s.emailsToday || 0).toLocaleString(), "מיילים שנשלחו היום", "#a6e3a1", `${s.emailsFailedToday || 0} שליחות נכשלו היום`)}
       ${metricCard(`${s.p99Ms}ms`, "P99 זמן תגובה", msColor)}
       ${metricCard(s.errors, "סה״כ שגיאות", s.errors > 0 ? "#f38ba8" : "#a6e3a1")}
       ${metricCard(s.blockedBranches, "סניפים חסומים", s.blockedBranches > 0 ? "#f9e2af" : "#a6e3a1")}
@@ -706,7 +707,7 @@ async function devToggleBranch(branchId, block) {
 }
 
 const DEV_TABLES = ["users","branches","user_branches","weeks","shifts",
-  "shift_assignments","shift_availability","day_reports","change_requests","audit_log"];
+  "shift_assignments","shift_availability","day_reports","change_requests","audit_log","email_log"];
 
 function renderDevDbTabs() {
   document.getElementById("devDbTabs").innerHTML = DEV_TABLES.map(t => `

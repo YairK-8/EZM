@@ -208,6 +208,15 @@ def init_db() -> None:
               UNIQUE(kind, recipient, entity_key)
             );
 
+            CREATE TABLE IF NOT EXISTS email_log (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              kind TEXT NOT NULL,
+              recipient TEXT NOT NULL,
+              subject TEXT,
+              status TEXT NOT NULL,
+              created_at INTEGER NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS app_settings (
               key TEXT PRIMARY KEY,
               value TEXT NOT NULL,
@@ -766,6 +775,17 @@ def env_flag(name: str, default: str = "0") -> bool:
     return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def log_email_event(kind: str, recipient: str, subject: str, status: str) -> None:
+    try:
+        with db() as conn:
+            conn.execute(
+                "INSERT INTO email_log(kind,recipient,subject,status,created_at) VALUES(?,?,?,?,?)",
+                (kind, recipient or "", subject or "", status, int(time.time()))
+            )
+    except Exception as e:
+        print("Email log failed:", e)
+
+
 def send_otp_email(to_email: str, code: str) -> None:
     host = os.environ.get("SMTP_HOST")
     port = int(os.environ.get("SMTP_PORT", "587"))
@@ -789,6 +809,7 @@ def send_otp_email(to_email: str, code: str) -> None:
         if username and password:
             smtp.login(username, password)
         smtp.send_message(msg)
+    log_email_event("otp", to_email, msg["Subject"], "sent")
 
 
 def send_plain_email(to_email: str, subject: str, body: str) -> bool:
@@ -815,9 +836,11 @@ def send_plain_email(to_email: str, subject: str, body: str) -> bool:
             if username and password:
                 smtp.login(username, password)
             smtp.send_message(msg)
+        log_email_event("plain", to_email, subject, "sent")
         return True
     except Exception as e:
         print("Email send failed:", e)
+        log_email_event("plain", to_email, subject, "failed")
         return False
 
 
@@ -1465,6 +1488,15 @@ class EZMHandler(SimpleHTTPRequestHandler):
                 branches_count = conn.execute("SELECT COUNT(*) AS c FROM branches").fetchone()["c"]
                 weeks_count    = conn.execute("SELECT COUNT(*) AS c FROM weeks").fetchone()["c"]
                 blocked_count  = conn.execute("SELECT COUNT(*) AS c FROM branches WHERE is_blocked=1").fetchone()["c"]
+                today_start = int(time.mktime(time.strptime(iso_today(), "%Y-%m-%d")))
+                emails_today = conn.execute(
+                    "SELECT COUNT(*) AS c FROM email_log WHERE status='sent' AND created_at>=?",
+                    (today_start,)
+                ).fetchone()["c"]
+                emails_failed_today = conn.execute(
+                    "SELECT COUNT(*) AS c FROM email_log WHERE status='failed' AND created_at>=?",
+                    (today_start,)
+                ).fetchone()["c"]
                 db_size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
             # performance metrics from request log
             recent_all  = list(_req_log)
@@ -1493,6 +1525,8 @@ class EZMHandler(SimpleHTTPRequestHandler):
                 "branches": branches_count,
                 "weeks": weeks_count,
                 "blockedBranches": blocked_count,
+                "emailsToday": emails_today,
+                "emailsFailedToday": emails_failed_today,
                 "dbSizeBytes": db_size,
             })
             return
