@@ -541,19 +541,29 @@ function exportScheduleCSV() {
   if (!week) return;
   const branch = app.currentBranch?.name || "סניף";
 
-  // RTL order: Saturday on the left, Sunday on the far right
-  const exportDayKeys = [...DAY_KEYS].reverse(); // sat→fri→...→sun
+  // In RTL Excel, column A is the rightmost column: Sunday should appear first.
+  const exportDayKeys = [...DAY_KEYS];
 
   const getShift = (dk, slot) => week.shifts?.find(s => s.dayKey === dk && s.slot === slot);
+  const normalizeHours = hours => String(hours || "").replace("–", "-").trim();
   const getWorkerNames = shift => (shift?.assignments || [])
-    .map(a => a.userName || app.users.find(u => u.id === a.userId)?.fullName || "")
+    .map(a => {
+      const name = a.userName || app.users.find(u => u.id === a.userId)?.fullName || "";
+      if (!name) return "";
+      const personalHours = a.startTime && a.endTime ? `${a.startTime}-${a.endTime}` : "";
+      if (personalHours && normalizeHours(personalHours) !== normalizeHours(shift?.hours)) {
+        return `${name} ${personalHours}`;
+      }
+      return name;
+    })
     .filter(Boolean);
 
   const dayHeader = dk => {
     const idx = DAY_KEYS.indexOf(dk);
     const dateStr = addDays(week.weekStart, idx);
     const [, m, d] = dateStr.split("-");
-    return `${DAY_LABELS[dk]} ${parseInt(d)}/${parseInt(m)}`;
+    const holiday = holidayFor(dateStr, dk);
+    return `${DAY_LABELS[dk]} ${parseInt(d)}/${parseInt(m)}${holiday ? ` ${holiday}` : ""}`;
   };
 
   const cell = (value, style = 0) => ({ value, style });
@@ -564,8 +574,8 @@ function exportScheduleCSV() {
     return cell(target || "", 1);
   });
   const rows = [
-    [cell("יעד יומי", 3), ...headerCells, cell("", 4)],
-    [cell("", 3), ...targetCells, cell("", 4)],
+    [...headerCells, cell("יעד יומי", 3)],
+    [...targetCells, cell("", 3)],
   ];
 
   SHIFT_ORDER.forEach(slot => {
@@ -573,18 +583,16 @@ function exportScheduleCSV() {
     if (!hasSlot) return;
     const maxWorkers = Math.max(1, ...exportDayKeys.map(dk => getWorkerNames(getShift(dk, slot)).length));
     rows.push([
-      cell(shiftFullLabel(slot), 2),
       ...exportDayKeys.map(dk => cell(getShift(dk, slot)?.hours || "", 2)),
-      cell("מחסן", 3),
+      cell(shiftFullLabel(slot), 2),
     ]);
     for (let i = 0; i < maxWorkers; i++) {
       rows.push([
-        cell("", 4),
         ...exportDayKeys.map(dk => cell(getWorkerNames(getShift(dk, slot))[i] || "", 4)),
         cell("", 4),
       ]);
     }
-    rows.push([cell("", 4), ...exportDayKeys.map(() => cell("", 4)), cell("", 4)]);
+    rows.push([...exportDayKeys.map(() => cell("", 4)), cell("", 4)]);
   });
 
   downloadXlsx(rows, `לוז_${branch}_${week.weekStart}.xlsx`);
@@ -1569,8 +1577,7 @@ function openScheduleShiftModal(shift) {
              <button class="btn btn-ghost" id="modalShortageBtn" type="button">${shift.shortage ? "סגור חוסר" : "דווח חוסר"}</button>
              <button class="btn btn-ghost" id="modalReinforcementBtn" type="button">כ״א</button>
              ${canSetShiftMaxEmployees() ? `<button class="btn btn-ghost" id="modalMaxEmployeesBtn" type="button">${shiftMaxEmployees(shift) ? `תקן ${shiftMaxEmployees(shift)}` : "הגדר תקן"}</button>` : ""}
-             ${shift.slot === "middle" ? `<button class="btn btn-danger" id="modalDeleteMiddleShiftBtn" type="button">מחק אמצע</button>` : ""}
-             <button class="btn btn-ghost" id="cancelModalBtn">סגור</button>`
+             ${shift.slot === "middle" ? `<button class="btn btn-danger" id="modalDeleteMiddleShiftBtn" type="button">מחק אמצע</button>` : ""}`
   });
   const modalStaffedBtn = document.getElementById("modalMarkStaffedBtn");
   modalStaffedBtn.disabled = locked;
@@ -1940,7 +1947,6 @@ function openTaxiResponseRequiredModal(shiftId, userId, data, assignOptions = {}
     closeModal();
     await assignEmployee(shiftId, userId, assignOptions);
   });
-  document.getElementById("cancelModalBtn").addEventListener("click", closeModal);
 }
 
 async function removeAssignment(assignmentId) {
@@ -3425,36 +3431,6 @@ function closestPortalSlideIndex(carousel) {
   return bestIdx;
 }
 
-function portalSlideProgress(carousel) {
-  const slides = Array.from(carousel?.querySelectorAll(".ep-day-slide") || []);
-  if (slides.length < 2) return Number(slides[0]?.dataset.dayIdx || window._portalSelectedDay || 0);
-  const positions = slides.map(slide => slide.offsetLeft - carousel.offsetLeft);
-  const x = carousel.scrollLeft;
-  if (x <= positions[0]) return Number(slides[0].dataset.dayIdx);
-  const last = positions.length - 1;
-  if (x >= positions[last]) return Number(slides[last].dataset.dayIdx);
-  for (let i = 0; i < positions.length - 1; i += 1) {
-    if (x >= positions[i] && x <= positions[i + 1]) {
-      const span = Math.max(1, positions[i + 1] - positions[i]);
-      return i + ((x - positions[i]) / span);
-    }
-  }
-  return closestPortalSlideIndex(carousel);
-}
-
-function syncPortalDayStripToCarousel(carousel) {
-  const strip = document.getElementById("portalDateStrip");
-  const pills = Array.from(strip?.querySelectorAll(".ep-day-pill") || []);
-  if (!strip || pills.length < 2) return;
-  const progress = portalSlideProgress(carousel);
-  const lo = Math.max(0, Math.min(pills.length - 1, Math.floor(progress)));
-  const hi = Math.max(0, Math.min(pills.length - 1, Math.ceil(progress)));
-  const t = progress - lo;
-  const pillCenter = pill => pill.offsetLeft + (pill.offsetWidth / 2);
-  const left = (pillCenter(pills[lo]) * (1 - t)) + (pillCenter(pills[hi]) * t) - (strip.clientWidth / 2);
-  strip.scrollTo({ left: Math.max(0, left), behavior: "auto" });
-}
-
 function updateEpDayStripDepth() {
   const strip = document.getElementById("portalDateStrip");
   const pills = Array.from(document.querySelectorAll(".ep-day-pill"));
@@ -3559,8 +3535,6 @@ function renderEpDayContent(ws, dk, dayIdx, weekData, reinforcementRequests, tax
       if (carouselRaf) return;
       carouselRaf = requestAnimationFrame(() => {
         carouselRaf = 0;
-        syncPortalDayStripToCarousel(carousel);
-        updateEpDayStripDepth();
         updateEpDayCarouselDepth();
         const idx = closestPortalSlideIndex(carousel);
         if (idx !== window._portalSelectedDay) {
