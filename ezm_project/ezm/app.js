@@ -458,16 +458,16 @@ function defaultView(role) {
 
 // ── Navigation ─────────────────────────────────────────────────────────────────
 const VIEW_META = {
-  schedule:       ["סניף / שבוע",        "סידור שבועי"],
-  employees:      ["עובדים",             "ניהול עובדים"],
-  requests:       ["בקשות",              "בקשות ושינויים"],
-  reports:        ["דוחות",              "דוח סוף יום"],
-  area:           ["אזור",               "ניהול אזור"],
-  network:        ["רשת",                "ניהול רשת"],
-  employeePortal: ["אזור עובד",          "הלוז שלי"],
-  employeeRequests: ["אזור עובד",        "הבקשות שלי"],
-  auth:           ["EZM",               "כניסה"],
-  developer:      ["מפתח",              "Developer Console"],
+  schedule:         "סידור שבועי",
+  employees:        "עובדים",
+  requests:         "בקשות",
+  reports:          "דוחות",
+  area:             "ניהול אזור",
+  network:          "ניהול רשת",
+  employeePortal:   "הלוז שלי",
+  employeeRequests: "הבקשות שלי",
+  auth:             "כניסה",
+  developer:        "Developer Console",
 };
 
 function showView(name) {
@@ -485,9 +485,13 @@ function showView(name) {
   }
   document.querySelectorAll(".nav-item").forEach(b => b.classList.toggle("active", b.dataset.view === name));
   document.querySelectorAll("#employeeBottomNav [data-view]").forEach(b => b.classList.toggle("active", b.dataset.view === name));
-  const meta = VIEW_META[name] || ["EZM",""];
-  document.getElementById("topbarContext").textContent = meta[0];
-  document.getElementById("topbarTitle").textContent = meta[1];
+  const title = VIEW_META[name] || "EZM";
+  const contextEl = document.getElementById("topbarContext");
+  const dividerEl = document.querySelector(".topbar-divider");
+  contextEl.textContent = "";
+  contextEl.hidden = true;
+  if (dividerEl) dividerEl.hidden = true;
+  document.getElementById("topbarTitle").textContent = title;
   updateTopbarActions(name);
   if (name === "schedule") loadWeekView();
   if (name === "employees") renderEmployees();
