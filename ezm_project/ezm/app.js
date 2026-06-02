@@ -190,6 +190,15 @@ function shiftHoursDuration(hours) {
   return Math.max(0, (end - start) / 60);
 }
 
+function escapeXml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
 function fmtHoursCount(value) {
   const n = Math.round((Number(value) || 0) * 10) / 10;
   return Number.isInteger(n) ? String(n) : String(n).replace(/\.0$/, "");
@@ -208,6 +217,173 @@ function monthWeekStarts(date = new Date()) {
 function holidayFor(iso, dayKey) {
   if (dayKey === "sat") return HOLIDAYS[iso] || "";
   return HOLIDAYS[iso] || "";
+}
+
+const ZIP_CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const b of bytes) crc = ZIP_CRC_TABLE[(crc ^ b) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function writeUint16(bytes, offset, value) {
+  bytes[offset] = value & 0xff;
+  bytes[offset + 1] = (value >>> 8) & 0xff;
+}
+
+function writeUint32(bytes, offset, value) {
+  bytes[offset] = value & 0xff;
+  bytes[offset + 1] = (value >>> 8) & 0xff;
+  bytes[offset + 2] = (value >>> 16) & 0xff;
+  bytes[offset + 3] = (value >>> 24) & 0xff;
+}
+
+function concatUint8(parts) {
+  const length = parts.reduce((sum, part) => sum + part.length, 0);
+  const out = new Uint8Array(length);
+  let offset = 0;
+  parts.forEach(part => {
+    out.set(part, offset);
+    offset += part.length;
+  });
+  return out;
+}
+
+function createZipBlob(files, mimeType) {
+  const encoder = new TextEncoder();
+  const locals = [];
+  const centrals = [];
+  let offset = 0;
+  files.forEach(file => {
+    const nameBytes = encoder.encode(file.name);
+    const dataBytes = encoder.encode(file.content);
+    const crc = crc32(dataBytes);
+    const local = new Uint8Array(30 + nameBytes.length + dataBytes.length);
+    writeUint32(local, 0, 0x04034b50);
+    writeUint16(local, 4, 20);
+    writeUint16(local, 6, 0x0800);
+    writeUint16(local, 8, 0);
+    writeUint32(local, 10, 0);
+    writeUint32(local, 14, crc);
+    writeUint32(local, 18, dataBytes.length);
+    writeUint32(local, 22, dataBytes.length);
+    writeUint16(local, 26, nameBytes.length);
+    local.set(nameBytes, 30);
+    local.set(dataBytes, 30 + nameBytes.length);
+    locals.push(local);
+
+    const central = new Uint8Array(46 + nameBytes.length);
+    writeUint32(central, 0, 0x02014b50);
+    writeUint16(central, 4, 20);
+    writeUint16(central, 6, 20);
+    writeUint16(central, 8, 0x0800);
+    writeUint16(central, 10, 0);
+    writeUint32(central, 12, 0);
+    writeUint32(central, 16, crc);
+    writeUint32(central, 20, dataBytes.length);
+    writeUint32(central, 24, dataBytes.length);
+    writeUint16(central, 28, nameBytes.length);
+    writeUint32(central, 42, offset);
+    central.set(nameBytes, 46);
+    centrals.push(central);
+    offset += local.length;
+  });
+
+  const centralSize = centrals.reduce((sum, part) => sum + part.length, 0);
+  const eocd = new Uint8Array(22);
+  writeUint32(eocd, 0, 0x06054b50);
+  writeUint16(eocd, 8, files.length);
+  writeUint16(eocd, 10, files.length);
+  writeUint32(eocd, 12, centralSize);
+  writeUint32(eocd, 16, offset);
+  return new Blob([concatUint8([...locals, ...centrals, eocd])], { type: mimeType });
+}
+
+function excelColumnName(index) {
+  let n = index + 1;
+  let name = "";
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    name = String.fromCharCode(65 + rem) + name;
+    n = Math.floor((n - 1) / 26);
+  }
+  return name;
+}
+
+function xlsxCell(value, rowIndex, colIndex, style = 0) {
+  const ref = `${excelColumnName(colIndex)}${rowIndex}`;
+  const styleAttr = style ? ` s="${style}"` : "";
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return `<c r="${ref}"${styleAttr}><v>${value}</v></c>`;
+  }
+  return `<c r="${ref}" t="inlineStr"${styleAttr}><is><t>${escapeXml(value)}</t></is></c>`;
+}
+
+function downloadXlsx(rows, fileName) {
+  const sheetRows = rows.map((row, rIdx) => {
+    const cells = row.map((cell, cIdx) => xlsxCell(cell?.value ?? cell ?? "", rIdx + 1, cIdx, cell?.style || 0)).join("");
+    return `<row r="${rIdx + 1}">${cells}</row>`;
+  }).join("");
+  const colCount = Math.max(1, ...rows.map(row => row.length));
+  const cols = Array.from({ length: colCount }, (_, i) =>
+    `<col min="${i + 1}" max="${i + 1}" width="${i === 0 || i === colCount - 1 ? 16 : 13}" customWidth="1"/>`
+  ).join("");
+  const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetViews><sheetView rightToLeft="1" workbookViewId="0"/></sheetViews>
+  <cols>${cols}</cols>
+  <sheetData>${sheetRows}</sheetData>
+</worksheet>`;
+  const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="3">
+    <font><sz val="12"/><name val="Arial"/></font>
+    <font><b/><sz val="12"/><color rgb="FF9C1D1D"/><name val="Arial"/></font>
+    <font><b/><sz val="12"/><color rgb="FF111111"/><name val="Arial"/></font>
+  </fonts>
+  <fills count="3">
+    <fill><patternFill patternType="none"/></fill>
+    <fill><patternFill patternType="gray125"/></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFD7C900"/><bgColor indexed="64"/></patternFill></fill>
+  </fills>
+  <borders count="2">
+    <border><left/><right/><top/><bottom/><diagonal/></border>
+    <border><left style="thin"><color rgb="FFD9D9D9"/></left><right style="thin"><color rgb="FFD9D9D9"/></right><top style="thin"><color rgb="FFD9D9D9"/></top><bottom style="thin"><color rgb="FFD9D9D9"/></bottom><diagonal/></border>
+  </borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="5">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="2" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+  </cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`;
+  const files = [
+    { name: "[Content_Types].xml", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>` },
+    { name: "_rels/.rels", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
+    { name: "xl/workbook.xml", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="לוז" sheetId="1" r:id="rId1"/></sheets></workbook>` },
+    { name: "xl/_rels/workbook.xml.rels", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
+    { name: "xl/styles.xml", content: stylesXml },
+    { name: "xl/worksheets/sheet1.xml", content: sheetXml },
+  ];
+  const blob = createZipBlob(files, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ── API ────────────────────────────────────────────────────────────────────────
@@ -376,83 +552,38 @@ function exportScheduleCSV() {
     return `${DAY_LABELS[dk]} ${parseInt(d)}/${parseInt(m)}`;
   };
 
-  const cell = (value, cls = "") => `<td class="${cls}">${escapeHtml(value || "")}</td>`;
-  const headerCells = exportDayKeys.map(dk => cell(dayHeader(dk), "day-header")).join("");
+  const cell = (value, style = 0) => ({ value, style });
+  const headerCells = exportDayKeys.map(dk => cell(dayHeader(dk), 1));
   const targetCells = exportDayKeys.map(dk => {
     const dayShifts = shiftsForDay(week, dk);
     const target = Math.max(0, ...dayShifts.map(s => Number(s?.salesTarget || 0)));
-    return cell(target ? target.toLocaleString() : "", "target-cell");
-  }).join("");
-  const sectionRows = [];
+    return cell(target || "", 1);
+  });
+  const rows = [
+    [cell("יעד יומי", 3), ...headerCells, cell("", 4)],
+    [cell("", 3), ...targetCells, cell("", 4)],
+  ];
 
   SHIFT_ORDER.forEach(slot => {
     const hasSlot = exportDayKeys.some(dk => getShift(dk, slot));
     if (!hasSlot) return;
     const maxWorkers = Math.max(1, ...exportDayKeys.map(dk => getWorkerNames(getShift(dk, slot)).length));
-    sectionRows.push(`
-      <tr>
-        ${cell(shiftFullLabel(slot), "section-label")}
-        ${exportDayKeys.map(dk => cell(getShift(dk, slot)?.hours || "", "hours-cell")).join("")}
-        ${cell("מחסן", "warehouse-label")}
-      </tr>`);
+    rows.push([
+      cell(shiftFullLabel(slot), 2),
+      ...exportDayKeys.map(dk => cell(getShift(dk, slot)?.hours || "", 2)),
+      cell("מחסן", 3),
+    ]);
     for (let i = 0; i < maxWorkers; i++) {
-      sectionRows.push(`
-        <tr>
-          ${cell("", "side-cell")}
-          ${exportDayKeys.map(dk => cell(getWorkerNames(getShift(dk, slot))[i] || "", "worker-cell")).join("")}
-          ${cell("", "side-cell")}
-        </tr>`);
+      rows.push([
+        cell("", 4),
+        ...exportDayKeys.map(dk => cell(getWorkerNames(getShift(dk, slot))[i] || "", 4)),
+        cell("", 4),
+      ]);
     }
-    sectionRows.push(`
-      <tr class="spacer-row">
-        ${cell("", "side-cell")}
-        ${exportDayKeys.map(() => cell("", "blank-cell")).join("")}
-        ${cell("", "side-cell")}
-      </tr>`);
+    rows.push([cell("", 4), ...exportDayKeys.map(() => cell("", 4)), cell("", 4)]);
   });
 
-  const html = `<!doctype html>
-<html dir="rtl">
-<head>
-  <meta charset="utf-8" />
-  <style>
-    body { direction: rtl; font-family: Arial, sans-serif; }
-    table { border-collapse: collapse; direction: rtl; }
-    td { border: 1px solid #d9d9d9; min-width: 92px; height: 22px; text-align: center; vertical-align: middle; font-size: 12px; white-space: nowrap; }
-    .title-cell { min-width: 120px; font-weight: 700; text-align: right; }
-    .day-header { color: #9c1d1d; font-weight: 700; background: #ffffff; }
-    .target-cell { color: #9c1d1d; font-weight: 700; background: #ffffff; }
-    .section-label { background: #d7c900; font-weight: 700; text-align: right; color: #111111; }
-    .hours-cell { background: #d7c900; font-weight: 700; color: #111111; direction: ltr; }
-    .warehouse-label { font-weight: 700; text-align: right; }
-    .worker-cell { color: #111111; }
-    .side-cell, .blank-cell { background: #ffffff; }
-    .spacer-row td { height: 30px; }
-  </style>
-</head>
-<body>
-  <table>
-    <tr>
-      ${cell(`יעד יומי`, "title-cell")}
-      ${headerCells}
-      ${cell("", "side-cell")}
-    </tr>
-    <tr>
-      ${cell("", "title-cell")}
-      ${targetCells}
-      ${cell("", "side-cell")}
-    </tr>
-    ${sectionRows.join("")}
-  </table>
-</body>
-</html>`;
-  const blob = new Blob(["\ufeff", html], { type: "application/vnd.ms-excel;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `לוז_${branch}_${week.weekStart}.xls`;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadXlsx(rows, `לוז_${branch}_${week.weekStart}.xlsx`);
 }
 
 function updateTopbarActions(view) {
@@ -3243,9 +3374,14 @@ function setPortalActiveDay(ws, idx, shouldScroll = true) {
   if (h) h.textContent = `${d2.getDate()} ב${MONTHS[d2.getMonth()]} ${d2.getFullYear()}`;
   if (n) n.textContent = `יום ${DAY_LABELS[dk2]}`;
 
-  centerPortalDayPill(idx, shouldScroll ? "smooth" : "auto");
-  if (shouldScroll) centerPortalDaySlide(idx, "smooth");
-  requestAnimationFrame(() => updateEpDayStripDepth());
+  if (shouldScroll) {
+    centerPortalDayPill(idx, "smooth");
+    centerPortalDaySlide(idx, "smooth");
+  }
+  requestAnimationFrame(() => {
+    updateEpDayStripDepth();
+    updateEpDayCarouselDepth();
+  });
 }
 
 function centerPortalDayPill(idx, behavior = "smooth") {
@@ -3285,6 +3421,36 @@ function closestPortalSlideIndex(carousel) {
   return bestIdx;
 }
 
+function portalSlideProgress(carousel) {
+  const slides = Array.from(carousel?.querySelectorAll(".ep-day-slide") || []);
+  if (slides.length < 2) return Number(slides[0]?.dataset.dayIdx || window._portalSelectedDay || 0);
+  const positions = slides.map(slide => slide.offsetLeft - carousel.offsetLeft);
+  const x = carousel.scrollLeft;
+  if (x <= positions[0]) return Number(slides[0].dataset.dayIdx);
+  const last = positions.length - 1;
+  if (x >= positions[last]) return Number(slides[last].dataset.dayIdx);
+  for (let i = 0; i < positions.length - 1; i += 1) {
+    if (x >= positions[i] && x <= positions[i + 1]) {
+      const span = Math.max(1, positions[i + 1] - positions[i]);
+      return i + ((x - positions[i]) / span);
+    }
+  }
+  return closestPortalSlideIndex(carousel);
+}
+
+function syncPortalDayStripToCarousel(carousel) {
+  const strip = document.getElementById("portalDateStrip");
+  const pills = Array.from(strip?.querySelectorAll(".ep-day-pill") || []);
+  if (!strip || pills.length < 2) return;
+  const progress = portalSlideProgress(carousel);
+  const lo = Math.max(0, Math.min(pills.length - 1, Math.floor(progress)));
+  const hi = Math.max(0, Math.min(pills.length - 1, Math.ceil(progress)));
+  const t = progress - lo;
+  const pillCenter = pill => pill.offsetLeft + (pill.offsetWidth / 2);
+  const left = (pillCenter(pills[lo]) * (1 - t)) + (pillCenter(pills[hi]) * t) - (strip.clientWidth / 2);
+  strip.scrollTo({ left: Math.max(0, left), behavior: "auto" });
+}
+
 function updateEpDayStripDepth() {
   const strip = document.getElementById("portalDateStrip");
   const pills = Array.from(document.querySelectorAll(".ep-day-pill"));
@@ -3305,6 +3471,24 @@ function updateEpDayStripDepth() {
     btn.style.setProperty("--day-scale", scale.toFixed(3));
     btn.style.setProperty("--day-opacity", opacity.toFixed(3));
     btn.style.setProperty("--day-y", `${y.toFixed(1)}px`);
+  });
+}
+
+function updateEpDayCarouselDepth() {
+  const carousel = document.getElementById("epDaysCarousel");
+  const slides = Array.from(carousel?.querySelectorAll(".ep-day-slide") || []);
+  if (!carousel || !slides.length) return;
+  const carouselRect = carousel.getBoundingClientRect();
+  const center = carouselRect.left + carouselRect.width / 2;
+  const focusRadius = Math.max(carouselRect.width * .58, 260);
+
+  slides.forEach(slide => {
+    const rect = slide.getBoundingClientRect();
+    const slideCenter = rect.left + rect.width / 2;
+    const distance = Math.min(Math.abs(slideCenter - center) / focusRadius, 1);
+    const focus = 1 - (distance * distance);
+    slide.style.setProperty("--ep-slide-scale", (.94 + focus * .06).toFixed(3));
+    slide.style.setProperty("--ep-slide-opacity", (.55 + focus * .45).toFixed(3));
   });
 }
 
@@ -3364,12 +3548,16 @@ function renderEpDayContent(ws, dk, dayIdx, weekData, reinforcementRequests, tax
       activeSlide.classList.add("ep-slide-active");
       centerPortalDayPill(dayIdx, "auto");
       updateEpDayStripDepth();
+      updateEpDayCarouselDepth();
     }
     let carouselRaf = 0;
     carousel.addEventListener("scroll", () => {
       if (carouselRaf) return;
       carouselRaf = requestAnimationFrame(() => {
         carouselRaf = 0;
+        syncPortalDayStripToCarousel(carousel);
+        updateEpDayStripDepth();
+        updateEpDayCarouselDepth();
         const idx = closestPortalSlideIndex(carousel);
         if (idx !== window._portalSelectedDay) {
           setPortalActiveDay(ws, idx, false);

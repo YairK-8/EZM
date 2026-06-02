@@ -3892,15 +3892,14 @@ body.employee-mode .ep-content {
   border-radius: 20px;
   box-shadow: 0 2px 16px rgba(0,0,0,.08);
   overflow: hidden;
-  transition: transform .25s, box-shadow .25s, opacity .25s;
-  opacity: .55;
-  transform: scale(.94);
+  will-change: transform, opacity;
+  transition: box-shadow .18s ease;
+  opacity: var(--ep-slide-opacity, .55);
+  transform: translate3d(0, 0, 0) scale(var(--ep-slide-scale, .94));
 }
 
 /* Active slide — centered */
 .ep-day-slide.ep-slide-active {
-  opacity: 1;
-  transform: scale(1);
   box-shadow: 0 6px 28px rgba(0,0,0,.14);
 }
 
