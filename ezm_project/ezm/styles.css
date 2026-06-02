@@ -3873,18 +3873,22 @@ body.employee-mode .ep-content {
 /* Carousel container — horizontal scroll snap */
 .ep-days-carousel {
   display: flex;
+  direction: ltr;
   overflow-x: scroll;
   scroll-snap-type: x mandatory;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x pan-y;
   scrollbar-width: none;
   gap: 12px;
   padding: 0 calc(7.5vw) 16px;   /* side padding so neighbours peek */
-  scroll-padding-left: calc(7.5vw);
+  scroll-padding-inline: calc(7.5vw);
 }
 .ep-days-carousel::-webkit-scrollbar { display: none; }
 
 /* Each slide */
 .ep-day-slide {
+  direction: rtl;
   flex: 0 0 85vw;
   max-width: 420px;
   scroll-snap-align: center;
@@ -3907,14 +3911,14 @@ body.employee-mode .ep-content {
 @media (min-width: 600px) {
   .ep-days-carousel {
     padding: 0 calc(10vw) 16px;
-    scroll-padding-left: calc(10vw);
+    scroll-padding-inline: calc(10vw);
   }
   .ep-day-slide { flex: 0 0 75vw; max-width: 480px; }
 }
 @media (min-width: 900px) {
   .ep-days-carousel {
     padding: 0 calc(15vw) 16px;
-    scroll-padding-left: calc(15vw);
+    scroll-padding-inline: calc(15vw);
   }
   .ep-day-slide { flex: 0 0 60vw; max-width: 540px; }
 }
