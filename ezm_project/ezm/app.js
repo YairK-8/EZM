@@ -25,11 +25,6 @@ function clearStoredToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
 
-function makeClientId() {
-  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
-  return `client-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
 // ── State ─────────────────────────────────────────────────────────────────────
 const app = {
   token:        getStoredToken(),
@@ -45,17 +40,10 @@ const app = {
   selectedShiftId: null,
   openSelectedShiftAfterLoad: false,
   activeView: null,
-  refreshTimer: null,
-  refreshInFlight: false,
-  realtimeStarted: false,
-  realtimeVisibilityBound: false,
-  eventSource: null,
-  clientId: localStorage.getItem("ezm_client_id") || makeClientId(),
   setupRequired: false,
   reinforcementPromptKey: "",
   suppressReinforcementPrompt: false,
 };
-localStorage.setItem("ezm_client_id", app.clientId);
 
 // ── Date helpers ───────────────────────────────────────────────────────────────
 function todayWeekStart() {
@@ -229,7 +217,6 @@ async function api(method, path, body) {
     headers: { "Content-Type": "application/json" },
   };
   if (app.token) opts.headers.Authorization = `Bearer ${app.token}`;
-  if (app.clientId) opts.headers["X-EZM-Client-ID"] = app.clientId;
   if (body !== undefined) opts.body = JSON.stringify(body);
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
@@ -240,85 +227,6 @@ async function api(method, path, body) {
     throw err;
   }
   return data;
-}
-
-function scheduleActiveViewRefresh(delay = 0) {
-  if (!app.activeView || app.activeView === "auth") return;
-  clearTimeout(app.refreshTimer);
-  app.refreshTimer = setTimeout(() => refreshActiveView("event"), delay);
-}
-
-function modalIsOpen() {
-  return !document.getElementById("modalBackdrop")?.hidden;
-}
-
-async function refreshActiveView(reason = "auto") {
-  if (!app.user || app.refreshInFlight || document.hidden || modalIsOpen()) return;
-  app.refreshInFlight = true;
-  try {
-    await refreshCoreData();
-    if (app.activeView === "schedule") {
-      app.currentWeek = null;
-      await loadWeekView({ ensureWeek: true });
-    } else if (app.activeView === "employees") {
-      renderEmployees();
-    } else if (app.activeView === "requests") {
-      await loadRequests();
-    } else if (app.activeView === "reports") {
-      await loadReports();
-    } else if (app.activeView === "area") {
-      await loadAreaView();
-    } else if (app.activeView === "network") {
-      await loadNetworkView();
-    } else if (app.activeView === "employeePortal") {
-      app.currentWeek = null;
-      await renderPortal();
-    } else if (app.activeView === "employeeRequests") {
-      await renderPortalRequests();
-    } else if (app.activeView === "developer") {
-      await loadDevView();
-    }
-  } catch (e) {
-    console.warn("refreshActiveView error", e);
-  } finally {
-    app.refreshInFlight = false;
-  }
-}
-
-function startAutoRefresh() {
-  startRealtimeEvents();
-  if (!app.realtimeVisibilityBound) {
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden && app.eventSource) scheduleActiveViewRefresh(150);
-    });
-    app.realtimeVisibilityBound = true;
-  }
-}
-
-function startRealtimeEvents() {
-  if (app.realtimeStarted || !app.token || !window.EventSource) return;
-  app.realtimeStarted = true;
-  const url = `/api/events?token=${encodeURIComponent(app.token)}`;
-  app.eventSource = new EventSource(url);
-  app.eventSource.addEventListener("data_changed", event => {
-    let payload = {};
-    try { payload = JSON.parse(event.data || "{}"); } catch {}
-    if (payload.sourceClientId && payload.sourceClientId === app.clientId) return;
-    app.currentWeek = null;
-    scheduleActiveViewRefresh(80);
-  });
-  app.eventSource.onerror = () => {
-    app.realtimeStarted = false;
-    app.eventSource?.close();
-    app.eventSource = null;
-    if (app.user && app.token) setTimeout(startRealtimeEvents, 3000);
-  };
-}
-
-function stopRealtimeEvents() {
-  app.realtimeStarted = false;
-  app.eventSource?.close();
-  app.eventSource = null;
 }
 
 // ── Role helpers ───────────────────────────────────────────────────────────────
@@ -667,11 +575,9 @@ async function enterApp() {
   await loadInitialData();
   applyRoleAccess();
   showView(defaultView(app.user.role));
-  startAutoRefresh();
 }
 
 async function logout() {
-  stopRealtimeEvents();
   app.token = "";
   app.user  = null;
   app.currentWeek = null;
@@ -1528,6 +1434,7 @@ function openScheduleShiftModal(shift) {
              <button class="btn btn-ghost" id="modalShortageBtn" type="button">${shift.shortage ? "סגור חוסר" : "דווח חוסר"}</button>
              <button class="btn btn-ghost" id="modalReinforcementBtn" type="button">כ״א</button>
              ${canSetShiftMaxEmployees() ? `<button class="btn btn-ghost" id="modalMaxEmployeesBtn" type="button">${shiftMaxEmployees(shift) ? `תקן ${shiftMaxEmployees(shift)}` : "הגדר תקן"}</button>` : ""}
+             ${shift.slot === "middle" ? `<button class="btn btn-danger" id="modalDeleteMiddleShiftBtn" type="button">מחק אמצע</button>` : ""}
              <button class="btn btn-ghost" id="cancelModalBtn">סגור</button>`
   });
   const modalStaffedBtn = document.getElementById("modalMarkStaffedBtn");
@@ -1553,6 +1460,11 @@ function openScheduleShiftModal(shift) {
   if (modalMaxEmployeesBtn) {
     modalMaxEmployeesBtn.disabled = locked;
     modalMaxEmployeesBtn.addEventListener("click", () => openShiftMaxEmployeesModal(shift));
+  }
+  const modalDeleteMiddleShiftBtn = document.getElementById("modalDeleteMiddleShiftBtn");
+  if (modalDeleteMiddleShiftBtn) {
+    modalDeleteMiddleShiftBtn.disabled = locked;
+    modalDeleteMiddleShiftBtn.addEventListener("click", () => deleteMiddleShift(shift));
   }
   document.querySelectorAll("[data-assign-user]").forEach(btn => {
     btn.disabled = locked;
@@ -1722,6 +1634,20 @@ function renderDrawer() {
 
   document.getElementById("addReinforcementBtn").disabled = locked;
   const drawerFooter = document.querySelector("#scheduleView .drawer-footer");
+  let deleteMiddleBtn = document.getElementById("deleteMiddleShiftBtn");
+  if (drawerFooter && !deleteMiddleBtn) {
+    deleteMiddleBtn = document.createElement("button");
+    deleteMiddleBtn.className = "btn btn-danger btn-sm";
+    deleteMiddleBtn.id = "deleteMiddleShiftBtn";
+    deleteMiddleBtn.type = "button";
+    drawerFooter.appendChild(deleteMiddleBtn);
+  }
+  if (deleteMiddleBtn) {
+    deleteMiddleBtn.textContent = "מחק אמצע";
+    deleteMiddleBtn.hidden = shift.slot !== "middle";
+    deleteMiddleBtn.disabled = locked;
+    deleteMiddleBtn.onclick = locked ? null : () => deleteMiddleShift(shift);
+  }
   let maxBtn = document.getElementById("setShiftMaxBtn");
   if (drawerFooter && !maxBtn) {
     maxBtn = document.createElement("button");
@@ -1992,6 +1918,24 @@ function openMiddleShiftModal(dayKey) {
     }
   });
   document.getElementById("cancelModalBtn").addEventListener("click", closeModal);
+}
+
+async function deleteMiddleShift(shift) {
+  if (!shift || shift.slot !== "middle") return;
+  if (!confirm("למחוק את משמרת האמצע? אפשר למחוק רק משמרת בלי שיבוצים, זמינות או בקשות.")) return;
+  try {
+    await api("DELETE", `/api/shifts/${shift.id}`);
+    closeModal();
+    app.selectedShiftId = null;
+    await loadWeekView();
+  } catch (err) {
+    const msg = err.data?.error === "shift_has_data"
+      ? "אי אפשר למחוק משמרת אמצע שכבר יש עליה שיבוצים, זמינות או בקשות."
+      : err.data?.error === "week_locked"
+        ? "השבוע סגור ולכן אי אפשר למחוק משמרת."
+        : "שגיאה במחיקת משמרת האמצע.";
+    alert(msg);
+  }
 }
 
 function openShiftMaxEmployeesModal(shift) {
@@ -4511,7 +4455,6 @@ async function bootstrap() {
       await loadInitialData();
       applyRoleAccess();
       showView(defaultView(app.user.role));
-      startAutoRefresh();
     } catch (e) {
       app.token = "";
       clearStoredToken();
