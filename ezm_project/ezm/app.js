@@ -73,6 +73,12 @@ function parseIso(iso) {
 
 const DAY_LABELS = { sun:"ראשון", mon:"שני", tue:"שלישי", wed:"רביעי", thu:"חמישי", fri:"שישי", sat:"שבת" };
 const DAY_KEYS   = ["sun","mon","tue","wed","thu","fri","sat"];
+const SHIFT_ORDER = ["morning", "middle", "evening"];
+const SHIFT_META = {
+  morning: { label: "בוקר", fullLabel: "משמרת בוקר", icon: "☀️" },
+  middle:  { label: "אמצע", fullLabel: "משמרת אמצע", icon: "☀" },
+  evening: { label: "ערב", fullLabel: "משמרת ערב", icon: "🌙" },
+};
 const MONTHS     = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
 const WEEKDAY_OPTIONS = [
   { value: 0, label: "שני" },
@@ -89,6 +95,31 @@ let HOLIDAYS = {
   "2026-05-21":"ערב שבועות",
   "2026-05-22":"שבועות",
 };
+
+function shiftSortValue(slot) {
+  const idx = SHIFT_ORDER.indexOf(slot);
+  return idx === -1 ? 99 : idx;
+}
+
+function sortShifts(shifts = []) {
+  return [...shifts].sort((a, b) => shiftSortValue(a.slot) - shiftSortValue(b.slot));
+}
+
+function shiftsForDay(week, dayKey) {
+  return sortShifts((week?.shifts || []).filter(s => s.dayKey === dayKey));
+}
+
+function slotLabel(slot) {
+  return SHIFT_META[slot]?.label || "משמרת";
+}
+
+function shiftFullLabel(slot) {
+  return SHIFT_META[slot]?.fullLabel || "משמרת";
+}
+
+function shiftIcon(slot) {
+  return SHIFT_META[slot]?.icon || "•";
+}
 
 async function loadHolidays() {
   const CACHE_KEY = "ezm_holidays_v2";
@@ -401,10 +432,10 @@ function applyRoleAccess() {
 function exportScheduleCSV() {
   const week = app.currentWeek;
   if (!week) return;
-  const branch = app.currentBranch?.name || "";
+  const branch = app.currentBranch?.name || "סניף";
 
   // RTL order: Saturday on the left, Sunday on the far right
-  const csvDayKeys = [...DAY_KEYS].reverse(); // sat→fri→...→sun
+  const exportDayKeys = [...DAY_KEYS].reverse(); // sat→fri→...→sun
 
   const getShift = (dk, slot) => week.shifts?.find(s => s.dayKey === dk && s.slot === slot);
   const getWorkerNames = shift => (shift?.assignments || [])
@@ -418,44 +449,81 @@ function exportScheduleCSV() {
     return `${DAY_LABELS[dk]} ${parseInt(d)}/${parseInt(m)}`;
   };
 
-  // Find max worker counts across all days
-  const maxMorning = Math.max(1, ...DAY_KEYS.map(dk => getWorkerNames(getShift(dk,"morning")).length));
-  const maxEvening = Math.max(1, ...DAY_KEYS.map(dk => getWorkerNames(getShift(dk,"evening")).length));
+  const cell = (value, cls = "") => `<td class="${cls}">${escapeHtml(value || "")}</td>`;
+  const headerCells = exportDayKeys.map(dk => cell(dayHeader(dk), "day-header")).join("");
+  const targetCells = exportDayKeys.map(dk => {
+    const dayShifts = shiftsForDay(week, dk);
+    const target = Math.max(0, ...dayShifts.map(s => Number(s?.salesTarget || 0)));
+    return cell(target ? target.toLocaleString() : "", "target-cell");
+  }).join("");
+  const sectionRows = [];
 
-  const rows = [];
+  SHIFT_ORDER.forEach(slot => {
+    const hasSlot = exportDayKeys.some(dk => getShift(dk, slot));
+    if (!hasSlot) return;
+    const maxWorkers = Math.max(1, ...exportDayKeys.map(dk => getWorkerNames(getShift(dk, slot)).length));
+    sectionRows.push(`
+      <tr>
+        ${cell(shiftFullLabel(slot), "section-label")}
+        ${exportDayKeys.map(dk => cell(getShift(dk, slot)?.hours || "", "hours-cell")).join("")}
+        ${cell("מחסן", "warehouse-label")}
+      </tr>`);
+    for (let i = 0; i < maxWorkers; i++) {
+      sectionRows.push(`
+        <tr>
+          ${cell("", "side-cell")}
+          ${exportDayKeys.map(dk => cell(getWorkerNames(getShift(dk, slot))[i] || "", "worker-cell")).join("")}
+          ${cell("", "side-cell")}
+        </tr>`);
+    }
+    sectionRows.push(`
+      <tr class="spacer-row">
+        ${cell("", "side-cell")}
+        ${exportDayKeys.map(() => cell("", "blank-cell")).join("")}
+        ${cell("", "side-cell")}
+      </tr>`);
+  });
 
-  // Row 1: day headers (RTL: sat...sun)
-  rows.push(["", ...csvDayKeys.map(dk => dayHeader(dk))]);
-
-  // Row 2: יעד יומי
-  rows.push(["יעד יומי", ...csvDayKeys.map(dk => {
-    const m = getShift(dk,"morning"), e = getShift(dk,"evening");
-    return Math.max(Number(m?.salesTarget||0), Number(e?.salesTarget||0)) || "";
-  })]);
-
-  // Row 3: משמרת בוקר + שעות
-  rows.push(["משמרת בוקר", ...csvDayKeys.map(dk => getShift(dk,"morning")?.hours || "")]);
-
-  // Rows: one per morning worker slot
-  for (let i = 0; i < maxMorning; i++) {
-    rows.push([`עובד ${i+1}`, ...csvDayKeys.map(dk => getWorkerNames(getShift(dk,"morning"))[i] || "")]);
-  }
-
-  // Row: משמרת ערב + שעות
-  rows.push(["משמרת ערב", ...csvDayKeys.map(dk => getShift(dk,"evening")?.hours || "")]);
-
-  // Rows: one per evening worker slot
-  for (let i = 0; i < maxEvening; i++) {
-    rows.push([`עובד ${i+1}`, ...csvDayKeys.map(dk => getWorkerNames(getShift(dk,"evening"))[i] || "")]);
-  }
-
-  const BOM = "﻿";
-  const csv = BOM + rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\r\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const html = `<!doctype html>
+<html dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { direction: rtl; font-family: Arial, sans-serif; }
+    table { border-collapse: collapse; direction: rtl; }
+    td { border: 1px solid #d9d9d9; min-width: 92px; height: 22px; text-align: center; vertical-align: middle; font-size: 12px; white-space: nowrap; }
+    .title-cell { min-width: 120px; font-weight: 700; text-align: right; }
+    .day-header { color: #9c1d1d; font-weight: 700; background: #ffffff; }
+    .target-cell { color: #9c1d1d; font-weight: 700; background: #ffffff; }
+    .section-label { background: #d7c900; font-weight: 700; text-align: right; color: #111111; }
+    .hours-cell { background: #d7c900; font-weight: 700; color: #111111; direction: ltr; }
+    .warehouse-label { font-weight: 700; text-align: right; }
+    .worker-cell { color: #111111; }
+    .side-cell, .blank-cell { background: #ffffff; }
+    .spacer-row td { height: 30px; }
+  </style>
+</head>
+<body>
+  <table>
+    <tr>
+      ${cell(`יעד יומי`, "title-cell")}
+      ${headerCells}
+      ${cell("", "side-cell")}
+    </tr>
+    <tr>
+      ${cell("", "title-cell")}
+      ${targetCells}
+      ${cell("", "side-cell")}
+    </tr>
+    ${sectionRows.join("")}
+  </table>
+</body>
+</html>`;
+  const blob = new Blob(["\ufeff", html], { type: "application/vnd.ms-excel;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `לוז_${branch}_${week.weekStart}.csv`;
+  a.download = `לוז_${branch}_${week.weekStart}.xls`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -1013,6 +1081,7 @@ function renderBranchPickerForSchedule() {
         <span>אזור: ${b.area}</span>
         <span>מנהל: ${b.managerName || "לא שויך"}</span>
         <span>חוסרים השבוע: ${b.shortageCount || 0}</span>
+        ${(b.overstaffedCount || 0) ? `<span class="tag tag-red">חריגות תקן: ${b.overstaffedCount}</span>` : ""}
       </div>
     </button>`).join("") || `<div class="empty-state"><div>אין סניפים. צור סניף במסך ניהול רשת.</div></div>`;
 }
@@ -1041,17 +1110,15 @@ function renderWeekGrid() {
     col.className = "day-col";
     col.id = `schedule-day-${dk}`;
 
-    const morningShift = week.shifts?.find(s => s.dayKey === dk && s.slot === "morning");
-    const eveningShift = week.shifts?.find(s => s.dayKey === dk && s.slot === "evening");
-    const dayTarget = Math.max(Number(morningShift?.salesTarget || 0), Number(eveningShift?.salesTarget || 0));
-
-    const morningFilled = morningShift && morningShift.staffed;
-    const eveningFilled = eveningShift && eveningShift.staffed;
-    const bothStaffed   = morningShift && eveningShift && morningFilled && eveningFilled;
-    const partialStaffed = !bothStaffed && (morningFilled || eveningFilled);
+    const dayShifts = shiftsForDay(week, dk);
+    const dayTarget = Math.max(0, ...dayShifts.map(s => Number(s.salesTarget || 0)));
+    const existingSlots = new Set(dayShifts.map(s => s.slot));
+    const canAddMiddle = !locked && !existingSlots.has("middle") && existingSlots.has("morning") && existingSlots.has("evening");
+    const allStaffed = dayShifts.length && dayShifts.every(s => s.staffed);
+    const partialStaffed = !allStaffed && dayShifts.some(s => s.staffed);
 
     col.innerHTML = `
-      <div class="day-head${bothStaffed ? " day-head--staffed" : partialStaffed ? " day-head--partial" : ""}">
+      <div class="day-head${allStaffed ? " day-head--staffed" : partialStaffed ? " day-head--partial" : ""}">
         <div class="day-head-row">
           <span style="display:flex;align-items:center;gap:6px">
             <strong>${DAY_LABELS[dk]}</strong>
@@ -1064,8 +1131,10 @@ function renderWeekGrid() {
           <input type="number" min="0" value="${dayTarget}" data-day-key="${dk}" />
         </label>
       </div>
-      ${morningShift ? shiftCardHTML(morningShift, locked) : ""}
-      ${eveningShift ? shiftCardHTML(eveningShift, locked) : ""}
+      ${dayShifts.map((shift, idx) => `
+        ${canAddMiddle && idx === 1 ? middleShiftAddButtonHTML(dk) : ""}
+        ${shiftCardHTML(shift, locked)}
+      `).join("")}
     `;
     const targetInput = col.querySelector(".day-sales-target input");
     targetInput.disabled = locked || app.user?.role === "employee";
@@ -1084,8 +1153,20 @@ function renderWeekGrid() {
         renderDrawer();
       });
     });
+    col.querySelector("[data-add-middle-shift]")?.addEventListener("click", e => {
+      e.stopPropagation();
+      openMiddleShiftModal(dk);
+    });
     grid.appendChild(col);
   });
+}
+
+function middleShiftAddButtonHTML(dayKey) {
+  return `
+    <button class="add-middle-shift" type="button" data-add-middle-shift="${dayKey}">
+      <span>+</span>
+      <small>משמרת אמצע</small>
+    </button>`;
 }
 
 function renderScheduleDateStrip(week) {
@@ -1221,6 +1302,20 @@ function shiftWorkerCountTitle(shift) {
   return `${internal + external} עובדים${external ? ` (${internal}+כ״א ${external})` : ""}`;
 }
 
+function shiftMaxEmployees(shift) {
+  const n = Number(shift?.maxEmployees || 0);
+  return n > 0 ? n : null;
+}
+
+function isShiftOverstaffed(shift) {
+  const max = shiftMaxEmployees(shift);
+  return !!max && shiftWorkerCount(shift) > max;
+}
+
+function canSetShiftMaxEmployees() {
+  return app.user?.role === "network-manager" || app.user?.role === "area-manager" || app.user?.role === "developer";
+}
+
 async function renderReinforcementCandidates(shift, containerId, locked = false) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -1351,7 +1446,7 @@ async function setShiftStaffed(shift) {
 
 function openScheduleShiftModal(shift) {
   const locked = app.currentWeek?.status === "closed";
-  const label = shift.slot === "morning" ? "בוקר" : "ערב";
+  const label = slotLabel(shift.slot);
   const assigned = shift.assignments || [];
   const workerCountText = shiftWorkerCountTitle(shift);
   const available = availableUsersForShift(shift);
@@ -1361,7 +1456,8 @@ function openScheduleShiftModal(shift) {
     body: `
       <div class="mobile-shift-builder">
         <section>
-          <div class="mobile-shift-builder-title">משובצים ${workerCountText}</div>
+          <div class="mobile-shift-builder-title">משובצים ${workerCountText}${isShiftOverstaffed(shift) ? ` · חריגה מתקן ${shiftMaxEmployees(shift)}` : ""}</div>
+          ${isShiftOverstaffed(shift) ? `<div class="notice notice-error">יש חריגה בכמות העובדים למשמרת: ${shiftWorkerCount(shift)} מתוך ${shiftMaxEmployees(shift)}.</div>` : ""}
           <div id="modalAssignedList">
             ${assigned.length ? assigned.map(a => {
               const u = app.users.find(u => u.id === a.userId);
@@ -1411,6 +1507,7 @@ function openScheduleShiftModal(shift) {
     footer: `<button class="btn btn-primary" id="modalMarkStaffedBtn" type="button">${shift.staffed ? "בטל מאויש" : "סמן מאויש"}</button>
              <button class="btn btn-ghost" id="modalShortageBtn" type="button">${shift.shortage ? "סגור חוסר" : "דווח חוסר"}</button>
              <button class="btn btn-ghost" id="modalReinforcementBtn" type="button">כ״א</button>
+             ${canSetShiftMaxEmployees() ? `<button class="btn btn-ghost" id="modalMaxEmployeesBtn" type="button">${shiftMaxEmployees(shift) ? `תקן ${shiftMaxEmployees(shift)}` : "הגדר תקן"}</button>` : ""}
              <button class="btn btn-ghost" id="cancelModalBtn">סגור</button>`
   });
   const modalStaffedBtn = document.getElementById("modalMarkStaffedBtn");
@@ -1432,6 +1529,11 @@ function openScheduleShiftModal(shift) {
   const modalReinforcementBtn = document.getElementById("modalReinforcementBtn");
   modalReinforcementBtn.disabled = locked;
   modalReinforcementBtn.addEventListener("click", () => openReinforcementModal(shift));
+  const modalMaxEmployeesBtn = document.getElementById("modalMaxEmployeesBtn");
+  if (modalMaxEmployeesBtn) {
+    modalMaxEmployeesBtn.disabled = locked;
+    modalMaxEmployeesBtn.addEventListener("click", () => openShiftMaxEmployeesModal(shift));
+  }
   document.querySelectorAll("[data-assign-user]").forEach(btn => {
     btn.disabled = locked;
     btn.addEventListener("click", async () => {
@@ -1480,9 +1582,10 @@ function shiftCardHTML(shift, locked) {
   const sel = app.selectedShiftId === shift.id ? "selected" : "";
   const rem = remainingShortage(shift);
   const warn = rem > 0 ? "warning" : "";
+  const over = isShiftOverstaffed(shift) ? "overstaffed" : "";
   const lck  = locked ? "locked" : "";
-  const label = shift.slot === "morning" ? "בוקר" : "ערב";
-  const icon  = shift.slot === "morning" ? "☀️" : "🌙";
+  const label = slotLabel(shift.slot);
+  const icon  = shiftIcon(shift.slot);
   const countLabel = shiftWorkerCountLabel(shift);
   const countTitle = shiftWorkerCountTitle(shift);
   const assignedWorkers = (shift.assignments || []).map(a => {
@@ -1518,14 +1621,16 @@ function shiftCardHTML(shift, locked) {
     : (shift.staffed ? `<span class="tag tag-green">מאויש</span>` : "");
   const reinforceTag = shift.reinforcement
     ? `<span class="tag tag-blue">כ״א ${shift.reinforcement}</span>` : "";
+  const maxTag = shiftMaxEmployees(shift)
+    ? `<span class="tag ${isShiftOverstaffed(shift) ? "tag-red" : "tag-muted"}">תקן ${shiftWorkerCount(shift)}/${shiftMaxEmployees(shift)}</span>` : "";
   return `
-    <button class="shift-card ${sel} ${warn} ${lck}" data-shift-id="${shift.id}" type="button">
+    <button class="shift-card ${sel} ${warn} ${over} ${lck}" data-shift-id="${shift.id}" type="button">
       <div class="shift-card-top">
         <div class="shift-title-line"><strong>${icon} ${label}</strong><small>${shift.hours}</small></div>
       </div>
       ${coworkerHtml}
       <div class="shift-bottom">
-        <div class="shift-tags">${shortageTag}${reinforceTag}</div>
+        <div class="shift-tags">${shortageTag}${reinforceTag}${maxTag}</div>
         <span class="shift-count" title="${countTitle}">${countLabel}</span>
       </div>
     </button>`;
@@ -1542,7 +1647,7 @@ function renderDrawer() {
 
   const locked = week.status === "closed";
   const dayKey = shift.dayKey;
-  const label  = shift.slot === "morning" ? "בוקר" : "ערב";
+  const label  = slotLabel(shift.slot);
 
   document.getElementById("drawerTitle").textContent = `${DAY_LABELS[dayKey]} ${label}`;
   const drawerHours = document.getElementById("drawerHours");
@@ -1553,7 +1658,11 @@ function renderDrawer() {
   const dotEl = document.getElementById("drawerDot");
   const stEl  = document.getElementById("drawerStatusTag");
   const drawerRem = remainingShortage(shift);
-  if (shift.shortage && drawerRem > 0) {
+  if (isShiftOverstaffed(shift)) {
+    dotEl.className = "dot dot-red";
+    stEl.className  = "tag tag-red";
+    stEl.textContent = `חריגה ${shiftWorkerCount(shift)}/${shiftMaxEmployees(shift)}`;
+  } else if (shift.shortage && drawerRem > 0) {
     dotEl.className = "dot dot-yellow";
     stEl.className  = "tag tag-yellow";
     stEl.textContent = `חסר ${drawerRem}`;
@@ -1592,11 +1701,26 @@ function renderDrawer() {
   staffedBtn.disabled = locked;
 
   document.getElementById("addReinforcementBtn").disabled = locked;
+  const drawerFooter = document.querySelector("#scheduleView .drawer-footer");
+  let maxBtn = document.getElementById("setShiftMaxBtn");
+  if (drawerFooter && !maxBtn) {
+    maxBtn = document.createElement("button");
+    maxBtn.className = "btn btn-ghost btn-sm";
+    maxBtn.id = "setShiftMaxBtn";
+    maxBtn.type = "button";
+    drawerFooter.appendChild(maxBtn);
+  }
+  if (maxBtn) {
+    maxBtn.textContent = shiftMaxEmployees(shift) ? `תקן ${shiftMaxEmployees(shift)}` : "הגדר תקן";
+    maxBtn.hidden = !canSetShiftMaxEmployees();
+    maxBtn.disabled = locked;
+    maxBtn.onclick = locked ? null : () => openShiftMaxEmployeesModal(shift);
+  }
 
   // Assigned
   const assignedList = document.getElementById("assignedList");
   assignedList.innerHTML = "";
-  document.getElementById("assignedTotal").textContent = shiftWorkerCountTitle(shift);
+  document.getElementById("assignedTotal").textContent = `${shiftWorkerCountTitle(shift)}${isShiftOverstaffed(shift) ? ` · חריגה מתקן ${shiftMaxEmployees(shift)}` : ""}`;
 
   (shift.assignments || []).forEach(a => {
     const u = app.users.find(u => u.id === a.userId);
@@ -1677,11 +1801,14 @@ function renderDrawer() {
 
 async function assignEmployee(shiftId, userId, options = {}) {
   try {
-    await api("POST", "/api/assignments", { shiftId, userId });
+    const result = await api("POST", "/api/assignments", { shiftId, userId });
     if (options.reopenMobileShiftId && window.matchMedia("(max-width: 900px)").matches) {
       await reopenScheduleShiftModal(options.reopenMobileShiftId);
     } else {
       await loadWeekView();
+    }
+    if (result.overstaffed) {
+      alert(`השיבוץ בוצע, אבל יש חריגה מכמות העובדים: ${result.staffedCount}/${result.maxEmployees}.`);
     }
   } catch (e) {
     if (e.status === 409 && e.data?.error === "taxi_response_required") {
@@ -1714,9 +1841,18 @@ function openTaxiResponseRequiredModal(shiftId, userId, data, assignOptions = {}
   });
   document.querySelectorAll("[data-taxi-answer]").forEach(btn => {
     btn.addEventListener("click", async () => {
-      btn.disabled = true;
-      await api("PUT", `/api/requests/${btn.dataset.taxiAnswer}`, { status: btn.dataset.status });
-      btn.closest(".data-row")?.remove();
+      try {
+        btn.disabled = true;
+        await api("PUT", `/api/requests/${btn.dataset.taxiAnswer}`, { status: btn.dataset.status });
+        btn.closest(".data-row")?.remove();
+        if (!document.querySelector("[data-taxi-answer]")) {
+          closeModal();
+          await assignEmployee(shiftId, userId, assignOptions);
+        }
+      } catch (err) {
+        btn.disabled = false;
+        alert("שגיאה בעדכון בקשת מונית");
+      }
     });
   });
   document.getElementById("retryTaxiAssignBtn").addEventListener("click", async () => {
@@ -1767,7 +1903,7 @@ function isValidTime24(value) {
 
 function openDefaultShiftHoursModal(shift) {
   const [start, end] = shift.hours.split("-");
-  const label = shift.slot === "morning" ? "בוקר" : "ערב";
+  const label = slotLabel(shift.slot);
   modal({
     kicker: "ברירת מחדל",
     title: `שעות ${DAY_LABELS[shift.dayKey]} ${label}`,
@@ -1798,6 +1934,67 @@ function openDefaultShiftHoursModal(shift) {
       await loadWeekView();
     } catch (err) {
       alert("שגיאה בשמירת שעות ברירת מחדל: " + (err.data?.error || err.message));
+    }
+  });
+  document.getElementById("cancelModalBtn").addEventListener("click", closeModal);
+}
+
+function openMiddleShiftModal(dayKey) {
+  modal({
+    kicker: "משמרת אמצע",
+    title: `פתיחת משמרת אמצע · ${DAY_LABELS[dayKey]}`,
+    body: `
+      <div class="form-grid">
+        <div class="field"><label>שעת התחלה</label><input class="time24-input" type="text" id="middleShiftStart" value="12:00" placeholder="12:00" inputmode="numeric" /></div>
+        <div class="field"><label>שעת סיום</label><input class="time24-input" type="text" id="middleShiftEnd" value="18:00" placeholder="18:00" inputmode="numeric" /></div>
+      </div>`,
+    footer: `<button class="btn btn-primary" id="createMiddleShiftBtn">פתח משמרת</button>
+             <button class="btn btn-ghost" id="cancelModalBtn">ביטול</button>`
+  });
+  document.getElementById("createMiddleShiftBtn").addEventListener("click", async () => {
+    const start = document.getElementById("middleShiftStart").value;
+    const end = document.getElementById("middleShiftEnd").value;
+    if (!isValidTime24(start) || !isValidTime24(end)) return alert("השעה צריכה להיות בפורמט 24 שעות, למשל 12:00");
+    try {
+      await api("POST", "/api/shifts", {
+        weekId: app.currentWeek.id,
+        dayKey,
+        slot: "middle",
+        hours: `${start}-${end}`,
+      });
+      closeModal();
+      await loadWeekView();
+    } catch (err) {
+      const msg = err.data?.error === "shift_exists" ? "כבר קיימת משמרת אמצע ביום הזה."
+        : err.data?.error === "week_locked" ? "השבוע סגור ולכן אי אפשר לפתוח משמרת."
+        : "שגיאה בפתיחת משמרת אמצע.";
+      alert(msg);
+    }
+  });
+  document.getElementById("cancelModalBtn").addEventListener("click", closeModal);
+}
+
+function openShiftMaxEmployeesModal(shift) {
+  const current = shiftMaxEmployees(shift) || "";
+  modal({
+    kicker: "תקן עובדים",
+    title: `${DAY_LABELS[shift.dayKey]} ${slotLabel(shift.slot)}`,
+    body: `
+      <div class="notice notice-info">התקן נקבע על ידי מנהל מעל מנהל הסניף. חריגה לא תחסום שיבוץ, אלא תסומן למעקב.</div>
+      <div class="form-grid mt-3">
+        <div class="field full"><label>מקסימום עובדים למשמרת</label><input type="number" id="shiftMaxEmployeesInput" min="0" value="${current}" placeholder="ללא הגבלה" /></div>
+      </div>`,
+    footer: `<button class="btn btn-primary" id="saveShiftMaxEmployees">שמור תקן</button>
+             <button class="btn btn-ghost" id="cancelModalBtn">ביטול</button>`
+  });
+  document.getElementById("saveShiftMaxEmployees").addEventListener("click", async () => {
+    const raw = document.getElementById("shiftMaxEmployeesInput").value;
+    try {
+      await api("PUT", `/api/shifts/${shift.id}`, { ...shift, maxEmployees: raw ? Number(raw) : null });
+      closeModal();
+      await loadWeekView();
+    } catch (err) {
+      alert("שגיאה בשמירת תקן עובדים");
     }
   });
   document.getElementById("cancelModalBtn").addEventListener("click", closeModal);
@@ -2331,7 +2528,7 @@ window.openTimeRequestsModal = function(userId) {
     kicker: "שינויי שעות",
     title: name,
     body: items.map(r => {
-      const shiftLabel = r.shift ? `${DAY_LABELS[r.shift.dayKey]} ${r.shift.slot === "morning" ? "בוקר" : "ערב"} · ${r.shift.hours}` : "";
+      const shiftLabel = r.shift ? `${DAY_LABELS[r.shift.dayKey]} ${slotLabel(r.shift.slot)} · ${r.shift.hours}` : "";
       const branchLabel = r.branch?.name ? `${r.branch.name}${r.branch.number ? " · " + r.branch.number : ""}` : "";
       const requested = r.requestedStart ? `${r.requestedStart}-${r.requestedEnd}` : "לא צוינו שעות";
       return `
@@ -2370,7 +2567,7 @@ function renderRequestList(containerId, requests) {
     const statusLabel = r.status === "open" ? "פתוח" : r.status === "approved" ? "מאושר" : "נדחה";
     const requesterName = r.requesterName || u?.fullName || "עובד";
     const shiftLabel = r.shift
-      ? `${DAY_LABELS[r.shift.dayKey]} ${r.shift.slot === "morning" ? "בוקר" : "ערב"} · ${r.shift.hours}`
+      ? `${DAY_LABELS[r.shift.dayKey]} ${slotLabel(r.shift.slot)} · ${r.shift.hours}`
       : "";
     const branchLabel = r.branch?.name ? `${r.branch.name}${r.branch.number ? " · " + r.branch.number : ""}` : "";
     const replacementLabel = r.replacementName ? ` · מחליף: ${r.replacementName}` : "";
@@ -2427,7 +2624,7 @@ function renderShortageRequests(week = app.currentWeek, branchId = app.currentBr
   }
   const branchName = app.branches.find(b => b.id === Number(branchId))?.name || app.currentBranch?.name || "";
   el.innerHTML = shortages.map(s => {
-    const label = s.slot === "morning" ? "בוקר" : "ערב";
+    const label = slotLabel(s.slot);
     return `
       <div class="request-row">
         <div class="request-info">
@@ -2589,6 +2786,7 @@ async function loadAreaView() {
         <span>מנהל: ${b.managerName || "לא שויך"}</span>
         <span>יעד שכר: ${b.laborTarget}%</span>
         <span>חוסרים השבוע: ${b.shortageCount || 0}</span>
+        ${(b.overstaffedCount || 0) ? `<span class="tag tag-red">חריגות תקן: ${b.overstaffedCount}</span>` : ""}
       </div>
       <div class="branch-card-footer">
         <span class="tag tag-green">פעיל</span>
@@ -2638,7 +2836,7 @@ async function loadAreaShortages() {
 
     el.innerHTML = allShortages.map(({ shift: s, branch, week }) => {
       const rem   = remainingShortage(s);
-      const label = s.slot === "morning" ? "בוקר" : "ערב";
+      const label = slotLabel(s.slot);
       const tagClass = rem === 0 ? "tag-green" : "tag-yellow";
       const tagText  = rem === 0 ? "מכוסה ✓" : s.shortage.status;
       return `
@@ -2693,7 +2891,7 @@ function renderNetworkBranches() {
     <div class="data-row">
       <div class="data-row-main">
         <strong>${b.name}${b.number ? " · " + b.number : ""}</strong>
-        <small>אזור ${b.area} · מנהל: ${b.managerName || "—"} · יעד שכר ${b.laborTarget}% · חוסרים ${b.shortageCount || 0}</small>
+        <small>אזור ${b.area} · מנהל: ${b.managerName || "—"} · יעד שכר ${b.laborTarget}% · חוסרים ${b.shortageCount || 0}${(b.overstaffedCount || 0) ? ` · חריגות תקן ${b.overstaffedCount}` : ""}</small>
       </div>
       <span class="tag tag-accent">פעיל</span>
       <div class="data-row-actions">
@@ -3017,9 +3215,8 @@ function renderEpDayStrip(ws, weekData, activeDayIdx, reinforcementRequests = []
     let hrsLabel = "";
     (weekData?.shifts || []).filter(s => s.dayKey === dk).forEach(s => {
       const myA = s.assignments?.find(a => a.userId === app.user.id);
-      const isReinf = s.slot === "morning"
-        ? reinforcementRequests?.find(r => r.shift?.dayKey === dk && r.shift?.slot === "morning" && r.status === "approved")
-        : reinforcementRequests?.find(r => r.shift?.dayKey === dk && r.shift?.slot === "evening" && r.status === "approved");
+      const isReinf = reinforcementRequests?.find(r =>
+        r.shift?.dayKey === dk && r.shift?.slot === s.slot && r.status === "approved");
       if ((myA && stripPublished) || isReinf) {
         const dec = shiftHoursDecimal(isReinf?.shift?.hours || s.hours, myA);
         if (dec) hrsLabel = dec.toString();
@@ -3161,33 +3358,33 @@ function renderEpDayContent(ws, dk, dayIdx, weekData, reinforcementRequests, tax
     const dI      = parseIso(isoI);
     const holidayI = holidayFor(isoI, dkI);
 
-    const morningShift = weekData?.shifts?.find(s => s.dayKey === dkI && s.slot === "morning");
-    const eveningShift = weekData?.shifts?.find(s => s.dayKey === dkI && s.slot === "evening");
-    const myMorningAssign = morningShift?.assignments?.find(a => a.userId === app.user.id);
-    const myEveningAssign = eveningShift?.assignments?.find(a => a.userId === app.user.id);
-    const myMorningAvail  = morningShift?.availability?.find(a => a.userId === app.user.id);
-    const myEveningAvail  = eveningShift?.availability?.find(a => a.userId === app.user.id);
-    const morningReinf = reinforcementRequests.find(r =>
-      r.shift?.weekStart === ws && r.shift?.dayKey === dkI && r.shift?.slot === "morning");
-    const eveningReinf = reinforcementRequests.find(r =>
-      r.shift?.weekStart === ws && r.shift?.dayKey === dkI && r.shift?.slot === "evening");
-
-    const isPublished     = weekData?.status === "published" || weekData?.status === "closed";
-    const isAssignedMorning = (!!myMorningAssign && isPublished) || morningReinf?.status === "approved";
-    const isAssignedEvening = (!!myEveningAssign && isPublished) || eveningReinf?.status === "approved";
-    const hasAnyAssignment  = isAssignedMorning || isAssignedEvening;
+    const dayShifts = shiftsForDay(weekData, dkI);
+    const shiftStates = dayShifts.map(shift => {
+      const myAssign = shift.assignments?.find(a => a.userId === app.user.id);
+      const myAvail = shift.availability?.find(a => a.userId === app.user.id);
+      const reinf = reinforcementRequests.find(r =>
+        r.shift?.weekStart === ws && r.shift?.dayKey === dkI && r.shift?.slot === shift.slot);
+      const isPublished = weekData?.status === "published" || weekData?.status === "closed";
+      return {
+        slot: shift.slot,
+        shift,
+        myAssign,
+        myAvail,
+        reinf,
+        isAssigned: (!!myAssign && isPublished) || reinf?.status === "approved",
+      };
+    });
+    const isPublished = weekData?.status === "published" || weekData?.status === "closed";
+    const hasAnyAssignment = shiftStates.some(s => s.isAssigned);
 
     const slide = document.createElement("div");
     slide.className = "ep-day-slide";
     slide.dataset.dayIdx = i;
 
     if (hasAnyAssignment || isPublished) {
-      buildModeB(slide, ws, dkI, dI, holidayI, morningShift, eveningShift,
-        myMorningAssign, myEveningAssign, morningReinf, eveningReinf,
-        isAssignedMorning, isAssignedEvening, weekData, taxiRequests);
+      buildModeB(slide, ws, dkI, dI, holidayI, shiftStates, weekData, taxiRequests);
     } else {
-      buildModeA(slide, ws, dkI, dI, holidayI, morningShift, eveningShift,
-        myMorningAvail, myEveningAvail);
+      buildModeA(slide, ws, dkI, dI, holidayI, shiftStates);
     }
 
     carousel.appendChild(slide);
@@ -3237,9 +3434,7 @@ function reinforcementDisplayShift(request, slot) {
   };
 }
 
-function buildModeB(slide, ws, dk, d, holiday, morningShift, eveningShift,
-  myMorningAssign, myEveningAssign, morningReinf, eveningReinf,
-  isAssignedMorning, isAssignedEvening, weekData, taxiRequests = []) {
+function buildModeB(slide, ws, dk, d, holiday, shiftStates, weekData, taxiRequests = []) {
 
   const canPull = weekData?.status === "draft";
   const isClosedWeek = weekData?.status === "closed";
@@ -3247,8 +3442,8 @@ function buildModeB(slide, ws, dk, d, holiday, morningShift, eveningShift,
   const card = document.createElement("div");
   card.className = "ep-day-card";
 
-  const hasStatus = isAssignedMorning || isAssignedEvening;
-  const dayTarget = Math.max(Number(morningShift?.salesTarget || 0), Number(eveningShift?.salesTarget || 0));
+  const hasStatus = shiftStates.some(item => item.isAssigned);
+  const dayTarget = Math.max(0, ...shiftStates.map(item => Number(item.shift?.salesTarget || 0)));
   card.innerHTML = `
     <div class="ep-day-card-header ${hasStatus ? "ep-day-card-header--assigned" : "ep-day-card-header--free"}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
@@ -3261,9 +3456,8 @@ function buildModeB(slide, ws, dk, d, holiday, morningShift, eveningShift,
       ${hasStatus ? `<div class="ep-day-status">הזנה הושלמה</div>` : ""}
     </div>`;
 
-  [["morning", morningShift, myMorningAssign, morningReinf, isAssignedMorning],
-   ["evening", eveningShift, myEveningAssign, eveningReinf, isAssignedEvening]].forEach(
-    ([slot, shift, myAssign, reinf, isAssigned]) => {
+  shiftStates.forEach(
+    ({ slot, shift, myAssign, reinf, isAssigned }) => {
       if (!shift && !reinf) return;
 
       const isCrossBranchReinf = !!reinf && !sameShiftRef(shift, reinf);
@@ -3275,8 +3469,8 @@ function buildModeB(slide, ws, dk, d, holiday, morningShift, eveningShift,
         ? (reinf.branch?.name || "")
         : (app.currentBranch?.name || "");
 
-      const label   = slot === "morning" ? "משמרת בוקר" : "משמרת ערב";
-      const icon    = slot === "morning" ? "☀️" : "🌙";
+      const label   = shiftFullLabel(slot);
+      const icon    = shiftIcon(slot);
       const myHours = (displayAssign?.startTime && displayAssign?.endTime)
         ? `${displayAssign.startTime}–${displayAssign.endTime}`
         : (displayShift?.hours || reinf?.shift?.hours || "");
@@ -3426,18 +3620,21 @@ function buildModeB(slide, ws, dk, d, holiday, morningShift, eveningShift,
   slide.appendChild(card);
 }
 
-function buildModeA(slide, ws, dk, d, holiday, morningShift, eveningShift, myMorningAvail, myEveningAvail) {
+function buildModeA(slide, ws, dk, d, holiday, shiftStates) {
   const dayName = DAY_LABELS[dk];
 
   const card = document.createElement("div");
   card.className = "ep-avail-card";
 
-  const hasMorning = !!morningShift;
-  const hasEvening = !!eveningShift;
-  const morningSelected = !!myMorningAvail;
-  const eveningSelected = !!myEveningAvail;
-
-  const selectedCount = (morningSelected ? 1 : 0) + (eveningSelected ? 1 : 0);
+  const availableStates = shiftStates.filter(item => !!item.shift);
+  const selections = {};
+  const hadSelections = {};
+  availableStates.forEach(({ slot, myAvail }) => {
+    selections[slot] = !!myAvail;
+    hadSelections[slot] = !!myAvail;
+  });
+  const selectedCount = Object.values(selections).filter(Boolean).length;
+  const hasAnyShift = availableStates.length > 0;
 
   card.innerHTML = `
     <div class="ep-empty-state">
@@ -3451,56 +3648,40 @@ function buildModeA(slide, ws, dk, d, holiday, morningShift, eveningShift, myMor
         <span class="ep-selected-count" id="epSelectedCount">${selectedCount} נבחרו</span>
       </div>
       <div id="epShiftCheckboxes">
-        ${hasMorning ? `
-        <div class="ep-shift-checkbox${morningSelected ? " selected submitted" : ""}" data-slot="morning">
+        ${availableStates.map(({ slot, shift, myAvail }) => `
+        <div class="ep-shift-checkbox${myAvail ? " selected submitted" : ""}" data-slot="${slot}">
           <div class="ep-shift-checkbox-left">
-            <div class="ep-shift-checkbox-icon morning">☀️</div>
+            <div class="ep-shift-checkbox-icon ${slot}">${shiftIcon(slot)}</div>
             <div class="ep-shift-checkbox-info">
-              <div class="ep-shift-checkbox-name">משמרת בוקר</div>
-              <div class="ep-shift-checkbox-hours"><span>🕐</span>${morningShift.hours || ""}</div>
+              <div class="ep-shift-checkbox-name">${shiftFullLabel(slot)}</div>
+              <div class="ep-shift-checkbox-hours"><span>🕐</span>${shift.hours || ""}</div>
             </div>
           </div>
           <span class="ep-submitted-label">נשלחה</span>
-          <div class="ep-checkbox-mark">${morningSelected ? "✓" : ""}</div>
-        </div>` : ""}
-        ${hasEvening ? `
-        <div class="ep-shift-checkbox${eveningSelected ? " selected submitted" : ""}" data-slot="evening">
-          <div class="ep-shift-checkbox-left">
-            <div class="ep-shift-checkbox-icon evening">🌙</div>
-            <div class="ep-shift-checkbox-info">
-              <div class="ep-shift-checkbox-name">משמרת ערב</div>
-              <div class="ep-shift-checkbox-hours"><span>🕐</span>${eveningShift.hours || ""}</div>
-            </div>
-          </div>
-          <span class="ep-submitted-label">נשלחה</span>
-          <div class="ep-checkbox-mark">${eveningSelected ? "✓" : ""}</div>
-        </div>` : ""}
-        ${!hasMorning && !hasEvening ? `<div style="text-align:center;padding:20px;color:var(--text3);font-size:.8rem;">אין משמרות מוגדרות ליום זה עדיין.</div>` : ""}
+          <div class="ep-checkbox-mark">${myAvail ? "✓" : ""}</div>
+        </div>`).join("")}
+        ${!hasAnyShift ? `<div style="text-align:center;padding:20px;color:var(--text3);font-size:.8rem;">אין משמרות מוגדרות ליום זה עדיין.</div>` : ""}
       </div>
     </div>
     <div class="ep-note-field">
       <textarea id="epAvailNote" placeholder="הוסף הערה למנהל (לא חובה)..." rows="2"></textarea>
     </div>
     <div class="ep-avail-info">ℹ️ הזמינות שלך תישאר עד בניית הלוז</div>
-    <button class="ep-send-btn" id="epSendAvailBtn" ${selectedCount === 0 && !morningSelected && !eveningSelected ? "disabled" : ""}>
+    <button class="ep-send-btn" id="epSendAvailBtn" ${selectedCount === 0 ? "disabled" : ""}>
       ✈️ שלח זמינות
     </button>`;
 
   slide.appendChild(card);
 
   // Pre-fill note from existing availability
-  const existingNote = myMorningAvail?.note || myEveningAvail?.note || "";
+  const existingNote = availableStates.find(item => item.myAvail?.note)?.myAvail?.note || "";
   const noteEl = card.querySelector("#epAvailNote");
   if (noteEl && existingNote) noteEl.value = existingNote;
 
   // Checkboxes — visual toggle only (submission happens on send button)
-  let selections = { morning: morningSelected, evening: eveningSelected };
-  const hadMorning = morningSelected;
-  const hadEvening = eveningSelected;
-
   function refreshSendBtn() {
-    const cnt = (selections.morning ? 1 : 0) + (selections.evening ? 1 : 0);
-    const hasToCancel = (hadMorning && !selections.morning) || (hadEvening && !selections.evening);
+    const cnt = Object.values(selections).filter(Boolean).length;
+    const hasToCancel = availableStates.some(({ slot }) => hadSelections[slot] && !selections[slot]);
     const sendBtn = card.querySelector("#epSendAvailBtn");
     if (sendBtn) sendBtn.disabled = cnt === 0 && !hasToCancel;
     const countEl = card.querySelector("#epSelectedCount");
@@ -3512,7 +3693,7 @@ function buildModeA(slide, ws, dk, d, holiday, morningShift, eveningShift, myMor
       const slot = box.dataset.slot;
       selections[slot] = !selections[slot];
       box.classList.toggle("selected", selections[slot]);
-      box.classList.toggle("submitted", (slot === "morning" ? hadMorning : hadEvening) && selections[slot]);
+      box.classList.toggle("submitted", hadSelections[slot] && selections[slot]);
       box.querySelector(".ep-checkbox-mark").textContent = selections[slot] ? "✓" : "";
       refreshSendBtn();
     });
@@ -3524,9 +3705,7 @@ function buildModeA(slide, ws, dk, d, holiday, morningShift, eveningShift, myMor
     if (btn) btn.disabled = true;
     try {
       let taxiDirections = [];
-      const selectedSatShift =
-        (selections.morning && morningShift?.dayKey === "sat") ||
-        (selections.evening && eveningShift?.dayKey === "sat");
+      const selectedSatShift = availableStates.some(({ slot, shift }) => selections[slot] && shift?.dayKey === "sat");
       if (selectedSatShift) {
         taxiDirections = await askSaturdayTaxiDirections();
         if (taxiDirections === null) {
@@ -3534,10 +3713,7 @@ function buildModeA(slide, ws, dk, d, holiday, morningShift, eveningShift, myMor
           return;
         }
       }
-      for (const slot of ["morning", "evening"]) {
-        const shift  = slot === "morning" ? morningShift : eveningShift;
-        if (!shift) continue;
-        const myAvail    = slot === "morning" ? myMorningAvail : myEveningAvail;
+      for (const { slot, shift, myAvail } of availableStates) {
         const wasSelected = !!myAvail;
         const isSelected  = selections[slot];
         const prevNote    = myAvail?.note || "";
@@ -3645,7 +3821,7 @@ async function renderPortalRequests() {
     const statusClasses = { open: "tag-yellow", approved: "tag-green", rejected: "tag-red" };
 
     const rowHTML = r => {
-      const shiftLabel = r.shift ? `${DAY_LABELS[r.shift.dayKey]} ${r.shift.slot === "morning" ? "בוקר" : "ערב"} · ${r.shift.hours}` : "";
+      const shiftLabel = r.shift ? `${DAY_LABELS[r.shift.dayKey]} ${slotLabel(r.shift.slot)} · ${r.shift.hours}` : "";
       const branchLabel = r.branch?.name || "";
       const taxiLabel = r.type === "taxi" ? (r.requestedStart === "arrival" ? "מונית הגעה" : "מונית חזור") : "";
       const requested = r.type === "taxi" ? "" : (r.requestedStart ? ` · ${r.requestedStart}-${r.requestedEnd}` : "");
@@ -3753,7 +3929,7 @@ window.saveRequest = async function(id, type) {
 
 function reinfAlertRowHTML(r) {
   const shiftLabel = r.shift
-    ? `${DAY_LABELS[r.shift.dayKey]} ${r.shift.slot === "morning" ? "בוקר" : "ערב"} · ${r.shift.hours}`
+    ? `${DAY_LABELS[r.shift.dayKey]} ${slotLabel(r.shift.slot)} · ${r.shift.hours}`
     : "";
   const branchLabel = r.branch?.name || "";
   return `
@@ -3922,7 +4098,7 @@ function renderPortalBranchBar() {
 }
 
 function openShiftRequestMenu(shift, canPullAvailability, hoursOnly = false) {
-  const label = shift.slot === "morning" ? "בוקר" : "ערב";
+  const label = slotLabel(shift.slot);
   modal({
     kicker: "בקשות",
     title: `${DAY_LABELS[shift.dayKey]} ${label}`,
@@ -3930,7 +4106,6 @@ function openShiftRequestMenu(shift, canPullAvailability, hoursOnly = false) {
       <div class="portal-request-menu">
         <button class="btn btn-ghost" type="button" data-request-type="hours">עדכון שעות</button>
         ${hoursOnly ? "" : `
-        <button class="btn btn-ghost" type="button" data-request-type="exit">לא יכול להגיע</button>
         <button class="btn btn-ghost" type="button" data-request-type="swap">מצאתי מחליף</button>
         ${canPullAvailability ? `<button class="btn btn-danger" type="button" data-pull-availability>בטל זמינות</button>` : ""}`}
       </div>`,
@@ -3965,7 +4140,7 @@ async function openEmployeeRequestModal(type, preferredShiftId = null, preferred
     alert("אין משמרות משובצות השבוע."); return;
   }
   const shiftOptions = myShifts.map(s =>
-    `<option value="${s.id}" ${s.id === preferredShiftId ? "selected" : ""}>${s.branchName ? s.branchName + " · " : ""}${DAY_LABELS[s.dayKey]} ${s.slot==="morning"?"בוקר":"ערב"} · ${s.hours}</option>`
+    `<option value="${s.id}" ${s.id === preferredShiftId ? "selected" : ""}>${s.branchName ? s.branchName + " · " : ""}${DAY_LABELS[s.dayKey]} ${slotLabel(s.slot)} · ${s.hours}</option>`
   ).join("");
 
   const typeLabel = type === "hours" ? "עדכון שעות" : type === "exit" ? "לא יכול להגיע" : "מצאתי מחליף";

@@ -1692,6 +1692,7 @@ input[type="time"] { direction: ltr; text-align: left; }
   box-shadow: 0 0 0 2px rgba(139,26,59,.12), var(--shadow-sm);
 }
 .shift-card.warning   { border-color: var(--yellow); box-shadow: 0 4px 12px rgba(180,83,9,.12); }
+.shift-card.overstaffed { border-color: rgba(220,38,38,.45); box-shadow: 0 6px 18px rgba(220,38,38,.12); }
 .shift-card.locked    { opacity: .6; cursor: default; }
 .shift-card-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 4px; }
 .shift-title-line { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
@@ -1723,6 +1724,39 @@ input[type="time"] { direction: ltr; text-align: left; }
   margin-top: 6px;
 }
 .shift-tags { display: flex; gap: 4px; flex-wrap: wrap; }
+
+.add-middle-shift {
+  width: calc(100% - 20px);
+  margin: 1px 10px;
+  min-height: 34px;
+  border: 1px dashed rgba(244,120,32,.42);
+  border-radius: 14px;
+  background: rgba(255,255,255,.62);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 900;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.75);
+}
+.add-middle-shift span {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(244,120,32,.12);
+  font-size: 1rem;
+}
+.add-middle-shift small { font-weight: 800; color: var(--text2); }
+.add-middle-shift:hover {
+  border-color: var(--accent);
+  background: rgba(255,247,237,.88);
+}
 
 /* ── Shift Drawer ─────────────────────────────────────────────────────────── */
 .shift-drawer {
@@ -3290,6 +3324,7 @@ body.employee-mode #employeePortalView.active {
   flex-shrink: 0;
 }
 .ep-shift-icon.morning { background: rgba(251,191,36,.18); }
+.ep-shift-icon.middle { background: rgba(244,120,32,.14); }
 .ep-shift-icon.evening { background: rgba(99,102,241,.12); }
 .ep-shift-meta {
   display: flex;
@@ -3547,6 +3582,7 @@ body.employee-mode #employeePortalView.active {
   flex-shrink: 0;
 }
 .ep-shift-checkbox-icon.morning { background: rgba(251,191,36,.18); }
+.ep-shift-checkbox-icon.middle { background: rgba(244,120,32,.14); }
 .ep-shift-checkbox-icon.evening { background: rgba(99,102,241,.12); }
 .ep-shift-checkbox-info { flex: 1; min-width: 0; }
 .ep-shift-checkbox-name {
@@ -4412,6 +4448,7 @@ body.employee-mode .ep-shift-icon {
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.7);
 }
 body.employee-mode .ep-shift-icon.morning { background: #fff2ca; }
+body.employee-mode .ep-shift-icon.middle { background: #fff0e6; }
 body.employee-mode .ep-shift-icon.evening { background: #eeeaff; }
 body.employee-mode .ep-req-btn,
 body.employee-mode .ep-avail-toggle {
