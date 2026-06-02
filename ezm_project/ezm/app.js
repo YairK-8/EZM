@@ -39,6 +39,10 @@ const app = {
   requestsBranchId: null,
   selectedShiftId: null,
   openSelectedShiftAfterLoad: false,
+  activeView: null,
+  refreshTimer: null,
+  refreshInFlight: false,
+  autoRefreshStarted: false,
   setupRequired: false,
   reinforcementPromptKey: "",
   suppressReinforcementPrompt: false,
@@ -194,7 +198,77 @@ async function api(method, path, body) {
     err.data = data;
     throw err;
   }
+  maybeScheduleRefreshAfterMutation(method, path);
   return data;
+}
+
+function shouldRefreshAfterMutation(method, path) {
+  if (String(method).toUpperCase() === "GET") return false;
+  if (!app.user || !path.startsWith("/api/")) return false;
+  if (path.startsWith("/api/auth") || path.startsWith("/api/dev") || path.startsWith("/api/setup")) return false;
+  if (String(method).toUpperCase() === "POST" && path === "/api/weeks") return false;
+  return true;
+}
+
+function maybeScheduleRefreshAfterMutation(method, path) {
+  if (!shouldRefreshAfterMutation(method, path)) return;
+  app.currentWeek = null;
+  scheduleActiveViewRefresh(250);
+}
+
+function scheduleActiveViewRefresh(delay = 0) {
+  if (!app.activeView || app.activeView === "auth") return;
+  clearTimeout(app.refreshTimer);
+  app.refreshTimer = setTimeout(() => refreshActiveView("mutation"), delay);
+}
+
+function modalIsOpen() {
+  return !document.getElementById("modalBackdrop")?.hidden;
+}
+
+async function refreshActiveView(reason = "auto") {
+  if (!app.user || app.refreshInFlight || document.hidden || modalIsOpen()) return;
+  app.refreshInFlight = true;
+  try {
+    await refreshCoreData();
+    if (app.activeView === "schedule") {
+      app.currentWeek = null;
+      await loadWeekView({ ensureWeek: reason !== "poll" });
+    } else if (app.activeView === "employees") {
+      renderEmployees();
+    } else if (app.activeView === "requests") {
+      await loadRequests();
+    } else if (app.activeView === "reports") {
+      await loadReports();
+    } else if (app.activeView === "area") {
+      await loadAreaView();
+    } else if (app.activeView === "network") {
+      await loadNetworkView();
+    } else if (app.activeView === "employeePortal") {
+      app.currentWeek = null;
+      await renderPortal();
+    } else if (app.activeView === "employeeRequests") {
+      await renderPortalRequests();
+    } else if (app.activeView === "developer") {
+      await loadDevView();
+    }
+  } catch (e) {
+    console.warn("refreshActiveView error", e);
+  } finally {
+    app.refreshInFlight = false;
+  }
+}
+
+function startAutoRefresh() {
+  if (app.autoRefreshStarted) return;
+  app.autoRefreshStarted = true;
+  setInterval(() => {
+    if (!app.user || app.activeView === "auth" || app.activeView === "developer") return;
+    refreshActiveView("poll");
+  }, 12000);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) scheduleActiveViewRefresh(150);
+  });
 }
 
 // ── Role helpers ───────────────────────────────────────────────────────────────
@@ -263,6 +337,7 @@ const VIEW_META = {
 };
 
 function showView(name) {
+  app.activeView = name;
   setMenuOpen(false);
   document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
   const el = document.getElementById(name + "View");
@@ -505,6 +580,7 @@ async function enterApp() {
   await loadInitialData();
   applyRoleAccess();
   showView(defaultView(app.user.role));
+  startAutoRefresh();
 }
 
 async function logout() {
@@ -889,7 +965,8 @@ function updatePendingBadge() {
 }
 
 // ── Schedule View ─────────────────────────────────────────────────────────────
-async function loadWeekView() {
+async function loadWeekView(options = {}) {
+  const ensureWeek = options.ensureWeek !== false;
   if (shouldPickBranchBeforeSchedule()) {
     renderBranchPickerForSchedule();
     return;
@@ -900,7 +977,9 @@ async function loadWeekView() {
   }
   try {
     // Ensure week exists
-    await api("POST", "/api/weeks", { branchId: app.currentBranch.id, weekStart: app.weekStart });
+    if (ensureWeek) {
+      await api("POST", "/api/weeks", { branchId: app.currentBranch.id, weekStart: app.weekStart });
+    }
     const data = await api("GET", `/api/weeks?branchId=${app.currentBranch.id}&weekStart=${app.weekStart}`);
     app.currentWeek = data.week;
     renderWeekGrid();
@@ -4237,6 +4316,7 @@ async function bootstrap() {
       await loadInitialData();
       applyRoleAccess();
       showView(defaultView(app.user.role));
+      startAutoRefresh();
     } catch (e) {
       app.token = "";
       clearStoredToken();
