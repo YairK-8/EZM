@@ -2609,7 +2609,7 @@ class EZMHandler(SimpleHTTPRequestHandler):
         json_response(self, 404, {"error": "not_found"})
 
     def route_delete(self, path: str) -> None:
-        # Delete optional middle shift if it has no related data.
+        # Delete optional middle shift if no employee is assigned to it.
         if path.startswith("/api/shifts/"):
             sid = int(path.split("/")[-1])
             auth = require_auth(self, "network-manager", "area-manager", "branch-manager")
@@ -2629,14 +2629,12 @@ class EZMHandler(SimpleHTTPRequestHandler):
                     json_response(self, 409, {"error": "week_locked"}); return
                 if not can_access_branch(conn, auth, shift["branch_id"]):
                     json_response(self, 403, {"error": "forbidden"}); return
-                related = conn.execute("""
-                    SELECT
-                      (SELECT COUNT(*) FROM shift_assignments WHERE shift_id=?) +
-                      (SELECT COUNT(*) FROM shift_availability WHERE shift_id=?) +
-                      (SELECT COUNT(*) FROM change_requests WHERE shift_id=?) AS c
-                """, (sid, sid, sid)).fetchone()["c"]
-                if related:
-                    json_response(self, 409, {"error": "shift_has_data"}); return
+                assigned = conn.execute(
+                    "SELECT COUNT(*) AS c FROM shift_assignments WHERE shift_id=?",
+                    (sid,)
+                ).fetchone()["c"]
+                if assigned:
+                    json_response(self, 409, {"error": "shift_has_assignments"}); return
                 conn.execute("DELETE FROM shifts WHERE id=?", (sid,))
                 audit(conn, auth["uid"], "delete_middle_shift", "shift", sid)
             json_response(self, 200, {"ok": True})

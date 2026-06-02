@@ -1922,15 +1922,15 @@ function openMiddleShiftModal(dayKey) {
 
 async function deleteMiddleShift(shift) {
   if (!shift || shift.slot !== "middle") return;
-  if (!confirm("למחוק את משמרת האמצע? אפשר למחוק רק משמרת בלי שיבוצים, זמינות או בקשות.")) return;
+  if (!confirm("למחוק את משמרת האמצע? אפשר למחוק כל עוד אין עובד משובץ.")) return;
   try {
     await api("DELETE", `/api/shifts/${shift.id}`);
     closeModal();
     app.selectedShiftId = null;
     await loadWeekView();
   } catch (err) {
-    const msg = err.data?.error === "shift_has_data"
-      ? "אי אפשר למחוק משמרת אמצע שכבר יש עליה שיבוצים, זמינות או בקשות."
+    const msg = err.data?.error === "shift_has_assignments"
+      ? "אי אפשר למחוק משמרת אמצע שיש עליה עובדים משובצים."
       : err.data?.error === "week_locked"
         ? "השבוע סגור ולכן אי אפשר למחוק משמרת."
         : "שגיאה במחיקת משמרת האמצע.";
