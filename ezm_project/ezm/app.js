@@ -328,14 +328,28 @@ function xlsxCell(value, rowIndex, colIndex, style = 0) {
   return `<c r="${ref}" t="inlineStr"${styleAttr}><is><t>${escapeXml(value)}</t></is></c>`;
 }
 
+function xlsxColumnWidths(rows, colCount) {
+  const widths = Array.from({ length: colCount }, () => 8);
+  rows.forEach(row => {
+    for (let i = 0; i < colCount; i += 1) {
+      const raw = row[i]?.value ?? row[i] ?? "";
+      const text = String(raw);
+      const longestLine = text.split(/\r?\n/).reduce((max, line) => Math.max(max, line.length), 0);
+      widths[i] = Math.max(widths[i], longestLine + 3);
+    }
+  });
+  return widths.map(width => Math.min(Math.max(width, 10), 34));
+}
+
 function downloadXlsx(rows, fileName) {
   const sheetRows = rows.map((row, rIdx) => {
     const cells = row.map((cell, cIdx) => xlsxCell(cell?.value ?? cell ?? "", rIdx + 1, cIdx, cell?.style || 0)).join("");
     return `<row r="${rIdx + 1}">${cells}</row>`;
   }).join("");
   const colCount = Math.max(1, ...rows.map(row => row.length));
-  const cols = Array.from({ length: colCount }, (_, i) =>
-    `<col min="${i + 1}" max="${i + 1}" width="${i === 0 || i === colCount - 1 ? 16 : 13}" customWidth="1"/>`
+  const colWidths = xlsxColumnWidths(rows, colCount);
+  const cols = colWidths.map((width, i) =>
+    `<col min="${i + 1}" max="${i + 1}" width="${width}" customWidth="1"/>`
   ).join("");
   const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
@@ -1142,7 +1156,6 @@ function renderBranchPickerForSchedule() {
   app.currentWeek = null;
   document.getElementById("weekRange").textContent = "בחר סניף";
   document.getElementById("scheduleBranchTitle").textContent = "סידור שבועי לפי סניף";
-  document.getElementById("scheduleWeekTitle").textContent = "";
   document.getElementById("weekGrid").innerHTML = app.branches.map(b => `
     <button class="branch-card schedule-branch-card" type="button" onclick="openBranchSchedule(${b.id})">
       <h3>${b.name}${b.number ? " · " + b.number : ""}</h3>
@@ -1164,8 +1177,7 @@ function renderWeekGrid() {
   const week = app.currentWeek;
   if (!week) return;
   document.getElementById("weekRange").textContent = weekRangeLabel(week.weekStart);
-  document.getElementById("scheduleBranchTitle").textContent = `${app.currentBranch?.name || ""} · סידור שבועי`;
-  document.getElementById("scheduleWeekTitle").textContent = weekRangeLabel(week.weekStart);
+  document.getElementById("scheduleBranchTitle").textContent = app.currentBranch?.name || "";
   renderScheduleDateStrip(week);
 
   const grid = document.getElementById("weekGrid");
@@ -2085,7 +2097,7 @@ function openShiftMaxEmployeesModal(shift) {
     kicker: "תקן עובדים",
     title: `${DAY_LABELS[shift.dayKey]} ${slotLabel(shift.slot)}`,
     body: `
-      <div class="notice notice-info">התקן נקבע על ידי מנהל מעל מנהל הסניף. חריגה לא תחסום שיבוץ, אלא תסומן למעקב.</div>
+      <div class="notice notice-info">התקן נקבע על ידי מנהל מעל מנהל הסניף ונשמר למשמרת התואמת גם בשבועות הבאים עד שינוי נוסף. חריגה לא תחסום שיבוץ, אלא תסומן למעקב.</div>
       <div class="form-grid mt-3">
         <div class="field full"><label>מקסימום עובדים למשמרת</label><input type="number" id="shiftMaxEmployeesInput" min="0" value="${current}" placeholder="ללא הגבלה" /></div>
       </div>`,

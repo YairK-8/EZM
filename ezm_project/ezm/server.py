@@ -136,6 +136,7 @@ def init_db() -> None:
               day_key TEXT NOT NULL,
               slot TEXT NOT NULL CHECK(slot IN ('morning','middle','evening')),
               hours TEXT NOT NULL,
+              max_employees INTEGER,
               updated_at INTEGER NOT NULL,
               PRIMARY KEY (branch_id, day_key, slot)
             );
@@ -233,6 +234,9 @@ def init_db() -> None:
             conn.execute("ALTER TABLE shifts ADD COLUMN staffed INTEGER NOT NULL DEFAULT 0")
         if "max_employees" not in shift_columns:
             conn.execute("ALTER TABLE shifts ADD COLUMN max_employees INTEGER")
+        default_columns = {r["name"] for r in conn.execute("PRAGMA table_info(branch_shift_defaults)").fetchall()}
+        if "max_employees" not in default_columns:
+            conn.execute("ALTER TABLE branch_shift_defaults ADD COLUMN max_employees INTEGER")
         user_columns = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
         if "manager_note" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN manager_note TEXT")
@@ -362,11 +366,12 @@ def migrate_shift_slot_checks(conn: sqlite3.Connection) -> None:
               day_key TEXT NOT NULL,
               slot TEXT NOT NULL CHECK(slot IN ('morning','middle','evening')),
               hours TEXT NOT NULL,
+              max_employees INTEGER,
               updated_at INTEGER NOT NULL,
               PRIMARY KEY (branch_id, day_key, slot)
             );
-            INSERT INTO branch_shift_defaults(branch_id, day_key, slot, hours, updated_at)
-            SELECT branch_id, day_key, slot, hours, updated_at
+            INSERT INTO branch_shift_defaults(branch_id, day_key, slot, hours, max_employees, updated_at)
+            SELECT branch_id, day_key, slot, hours, NULL, updated_at
             FROM branch_shift_defaults_old;
             DROP TABLE branch_shift_defaults_old;
         """)
@@ -447,6 +452,19 @@ def default_shift_hours(conn: sqlite3.Connection, branch: sqlite3.Row | None, da
     return {"morning": morning_h, "middle": middle_h, "evening": evening_h}.get(slot, evening_h)
 
 
+def default_shift_max_employees(conn: sqlite3.Connection, branch_id: int | None, day_key: str, slot: str) -> int | None:
+    if not branch_id:
+        return None
+    ensure_shift_defaults_table(conn)
+    row = conn.execute(
+        "SELECT max_employees FROM branch_shift_defaults WHERE branch_id=? AND day_key=? AND slot=?",
+        (branch_id, day_key, slot)
+    ).fetchone()
+    if not row or row["max_employees"] in (None, ""):
+        return None
+    return int(row["max_employees"])
+
+
 def ensure_shift_defaults_table(conn: sqlite3.Connection) -> None:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS branch_shift_defaults (
@@ -454,10 +472,14 @@ def ensure_shift_defaults_table(conn: sqlite3.Connection) -> None:
           day_key TEXT NOT NULL,
           slot TEXT NOT NULL CHECK(slot IN ('morning','middle','evening')),
           hours TEXT NOT NULL,
+          max_employees INTEGER,
           updated_at INTEGER NOT NULL,
           PRIMARY KEY (branch_id, day_key, slot)
         )
     """)
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(branch_shift_defaults)").fetchall()}
+    if "max_employees" not in columns:
+        conn.execute("ALTER TABLE branch_shift_defaults ADD COLUMN max_employees INTEGER")
 
 
 def ensure_week(conn: sqlite3.Connection, branch_id: int, week_start: str, now: int) -> sqlite3.Row:
@@ -478,9 +500,10 @@ def ensure_week(conn: sqlite3.Connection, branch_id: int, week_start: str, now: 
     for dk in day_keys:
         for slot in DEFAULT_SHIFT_SLOTS:
             h = default_shift_hours(conn, branch, dk, slot)
+            max_employees = default_shift_max_employees(conn, branch_id, dk, slot)
             conn.execute(
-                "INSERT INTO shifts(week_id,day_key,slot,hours,created_at) VALUES(?,?,?,?,?)",
-                (week_id, dk, slot, h, now)
+                "INSERT INTO shifts(week_id,day_key,slot,hours,max_employees,created_at) VALUES(?,?,?,?,?,?)",
+                (week_id, dk, slot, h, max_employees, now)
             )
     return conn.execute("SELECT * FROM weeks WHERE id=?", (week_id,)).fetchone()
 
@@ -1899,9 +1922,10 @@ class EZMHandler(SimpleHTTPRequestHandler):
                 for dk in day_keys:
                     for slot in DEFAULT_SHIFT_SLOTS:
                         h = default_shift_hours(conn, branch, dk, slot)
+                        max_employees = default_shift_max_employees(conn, branch_id, dk, slot)
                         conn.execute(
-                            "INSERT INTO shifts(week_id,day_key,slot,hours,created_at) VALUES(?,?,?,?,?)",
-                            (week_id, dk, slot, h, now)
+                            "INSERT INTO shifts(week_id,day_key,slot,hours,max_employees,created_at) VALUES(?,?,?,?,?,?)",
+                            (week_id, dk, slot, h, max_employees, now)
                         )
                 week = conn.execute("SELECT * FROM weeks WHERE id=?", (week_id,)).fetchone()
                 audit(conn, auth["uid"], f"פתח שבוע {week_start}", "week", week_id)
@@ -1988,9 +2012,10 @@ class EZMHandler(SimpleHTTPRequestHandler):
                     json_response(self, 409, {"error": "week_locked"})
                     return
                 try:
+                    max_employees = default_shift_max_employees(conn, week["branch_id"], day_key, slot)
                     cur = conn.execute(
-                        "INSERT INTO shifts(week_id,day_key,slot,hours,created_at) VALUES(?,?,?,?,?)",
-                        (week_id, day_key, slot, hours, now)
+                        "INSERT INTO shifts(week_id,day_key,slot,hours,max_employees,created_at) VALUES(?,?,?,?,?,?)",
+                        (week_id, day_key, slot, hours, max_employees, now)
                     )
                 except sqlite3.IntegrityError:
                     json_response(self, 409, {"error": "shift_exists"})
@@ -2418,23 +2443,26 @@ class EZMHandler(SimpleHTTPRequestHandler):
                 shift = conn.execute("SELECT * FROM shifts WHERE id=?", (sid,)).fetchone()
                 if not shift:
                     json_response(self, 404, {"error": "not_found"}); return
-                branch = conn.execute("SELECT branch_id FROM weeks WHERE id=?", (shift["week_id"],)).fetchone()
-                if not branch or not can_access_branch(conn, auth, branch["branch_id"]):
+                week_row = conn.execute("SELECT branch_id, week_start FROM weeks WHERE id=?", (shift["week_id"],)).fetchone()
+                if not week_row or not can_access_branch(conn, auth, week_row["branch_id"]):
                     json_response(self, 403, {"error": "forbidden"}); return
                 shortage = body.get("shortage")
                 max_employees = shift["max_employees"] if "max_employees" in shift.keys() else None
+                max_employees_changed = False
                 if "maxEmployees" in body:
                     raw_max = body.get("maxEmployees")
                     requested_max = None if raw_max in (None, "", 0, "0") else max(1, int(raw_max))
                     current_max = int(max_employees) if max_employees is not None else None
                     if auth["role"] == "branch-manager" and requested_max != current_max:
                         json_response(self, 403, {"error": "max_employees_forbidden"}); return
+                    max_employees_changed = requested_max != current_max
                     max_employees = requested_max
+                new_hours = body.get("hours", shift["hours"])
                 conn.execute("""
                     UPDATE shifts SET hours=?, sales_target=?, reinforcement=?, staffed=?,
                     max_employees=?, shortage_count=?, shortage_level=?, shortage_status=?, shortage_note=?
                     WHERE id=?
-                """, (body.get("hours", shift["hours"]),
+                """, (new_hours,
                       body.get("salesTarget", shift["sales_target"]),
                       body.get("reinforcement", shift["reinforcement"]),
                       1 if body.get("staffed", shift["staffed"]) else 0,
@@ -2444,6 +2472,29 @@ class EZMHandler(SimpleHTTPRequestHandler):
                       shortage["status"] if shortage else None,
                       shortage["note"] if shortage else None,
                       sid))
+                if "maxEmployees" in body and max_employees_changed:
+                    ensure_shift_defaults_table(conn)
+                    conn.execute("""
+                        INSERT INTO branch_shift_defaults(branch_id, day_key, slot, hours, max_employees, updated_at)
+                        VALUES(?,?,?,?,?,?)
+                        ON CONFLICT(branch_id, day_key, slot)
+                        DO UPDATE SET max_employees=excluded.max_employees, updated_at=excluded.updated_at
+                    """, (week_row["branch_id"], shift["day_key"], shift["slot"], new_hours, max_employees, now))
+                    conn.execute("""
+                        UPDATE shifts
+                        SET max_employees=?
+                        WHERE id IN (
+                          SELECT s.id
+                          FROM shifts s
+                          JOIN weeks w ON w.id=s.week_id
+                          WHERE w.branch_id=?
+                            AND s.day_key=?
+                            AND s.slot=?
+                            AND w.week_start >= ?
+                            AND w.status != 'closed'
+                        )
+                    """, (max_employees, week_row["branch_id"], shift["day_key"], shift["slot"], week_row["week_start"]))
+                    audit(conn, auth["uid"], f"×¢×“×›×Ÿ ×ª×§×Ÿ ×¢×•×‘×“×™× {shift['day_key']}/{shift['slot']} ×œ-{max_employees or '×œ×œ× ×ª×§×Ÿ'}", "branch", week_row["branch_id"])
                 shift = conn.execute("SELECT * FROM shifts WHERE id=?", (sid,)).fetchone()
             json_response(self, 200, {"ok": True, "shift": ser_shift(shift)})
             return

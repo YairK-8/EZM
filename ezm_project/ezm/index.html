@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>EZM · מערכת סידור עבודה</title>
-<link rel="stylesheet" href="styles.css?v=20260603-14" />
+<link rel="stylesheet" href="styles.css?v=20260603-17" />
 <link rel="manifest" href="/manifest.json" />
 <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 <link rel="icon" type="image/png" sizes="1024x1024" href="/EZM-icon.png" />
@@ -253,13 +253,6 @@
         <div class="page-header">
           <div class="page-header-text">
             <h1 id="scheduleBranchTitle">סידור שבועי</h1>
-            <p id="scheduleWeekTitle">בחר שבוע להצגה</p>
-          </div>
-          <div class="page-header-actions" id="scheduleActions"></div>
-        </div>
-
-        <div class="schedule-layout">
-          <div class="week-area">
             <div class="week-nav">
               <button class="btn btn-ghost btn-sm btn-icon" id="prevWeek" title="שבוע קודם">→</button>
               <h2 id="weekRange">—</h2>
@@ -270,6 +263,12 @@
                 <button class="btn btn-ghost btn-sm hidden" id="closeWeekBtn" type="button">סגור שבוע</button>
               </div>
             </div>
+          </div>
+          <div class="page-header-actions" id="scheduleActions"></div>
+        </div>
+
+        <div class="schedule-layout">
+          <div class="week-area">
             <div class="schedule-date-strip" id="scheduleDateStrip"></div>
             <div id="weekGrid" class="week-grid"></div>
           </div>
@@ -586,6 +585,6 @@
   </nav>
 </div><!-- /app -->
 
-<script src="app.js?v=20260603-14"></script>
+<script src="app.js?v=20260603-17"></script>
 </body>
 </html>
