@@ -3388,10 +3388,7 @@ function setPortalActiveDay(ws, idx, shouldScroll = true) {
     centerPortalDayPill(idx, "smooth");
     centerPortalDaySlide(idx, "smooth");
   }
-  requestAnimationFrame(() => {
-    updateEpDayStripDepth();
-    updateEpDayCarouselDepth();
-  });
+  requestAnimationFrame(updateEpDayStripDepth);
 }
 
 function centerPortalDayPill(idx, behavior = "smooth") {
@@ -3410,25 +3407,6 @@ function centerPortalDaySlide(idx, behavior = "smooth") {
       inline: "center",
       block: "nearest",
     });
-}
-
-function closestPortalSlideIndex(carousel) {
-  const slides = Array.from(carousel.querySelectorAll(".ep-day-slide"));
-  if (!slides.length) return window._portalSelectedDay ?? 0;
-  const carouselRect = carousel.getBoundingClientRect();
-  const center = carouselRect.left + carouselRect.width / 2;
-  let bestIdx = Number(slides[0].dataset.dayIdx);
-  let bestDistance = Infinity;
-  slides.forEach(slide => {
-    const rect = slide.getBoundingClientRect();
-    const slideCenter = rect.left + rect.width / 2;
-    const distance = Math.abs(slideCenter - center);
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      bestIdx = Number(slide.dataset.dayIdx);
-    }
-  });
-  return bestIdx;
 }
 
 function updateEpDayStripDepth() {
@@ -3451,24 +3429,6 @@ function updateEpDayStripDepth() {
     btn.style.setProperty("--day-scale", scale.toFixed(3));
     btn.style.setProperty("--day-opacity", opacity.toFixed(3));
     btn.style.setProperty("--day-y", `${y.toFixed(1)}px`);
-  });
-}
-
-function updateEpDayCarouselDepth() {
-  const carousel = document.getElementById("epDaysCarousel");
-  const slides = Array.from(carousel?.querySelectorAll(".ep-day-slide") || []);
-  if (!carousel || !slides.length) return;
-  const carouselRect = carousel.getBoundingClientRect();
-  const center = carouselRect.left + carouselRect.width / 2;
-  const focusRadius = Math.max(carouselRect.width * .58, 260);
-
-  slides.forEach(slide => {
-    const rect = slide.getBoundingClientRect();
-    const slideCenter = rect.left + rect.width / 2;
-    const distance = Math.min(Math.abs(slideCenter - center) / focusRadius, 1);
-    const focus = 1 - (distance * distance);
-    slide.style.setProperty("--ep-slide-scale", (.94 + focus * .06).toFixed(3));
-    slide.style.setProperty("--ep-slide-opacity", (.55 + focus * .45).toFixed(3));
   });
 }
 
@@ -3524,24 +3484,26 @@ function renderEpDayContent(ws, dk, dayIdx, weekData, reinforcementRequests, tax
   requestAnimationFrame(() => {
     const activeSlide = carousel.querySelector(`[data-day-idx="${dayIdx}"]`);
     if (activeSlide) {
-      carousel.scrollTo({ left: activeSlide.offsetLeft - carousel.offsetLeft, behavior: "instant" });
+      activeSlide.scrollIntoView({ behavior: "auto", inline: "center", block: "nearest" });
       activeSlide.classList.add("ep-slide-active");
       centerPortalDayPill(dayIdx, "auto");
       updateEpDayStripDepth();
-      updateEpDayCarouselDepth();
     }
-    let carouselRaf = 0;
-    carousel.addEventListener("scroll", () => {
-      if (carouselRaf) return;
-      carouselRaf = requestAnimationFrame(() => {
-        carouselRaf = 0;
-        updateEpDayCarouselDepth();
-        const idx = closestPortalSlideIndex(carousel);
-        if (idx !== window._portalSelectedDay) {
-          setPortalActiveDay(ws, idx, false);
+
+    const slides = carousel.querySelectorAll(".ep-day-slide");
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        const active = entry.isIntersecting && entry.intersectionRatio >= 0.5;
+        entry.target.classList.toggle("ep-slide-active", active);
+        if (active) {
+          const idx = Number(entry.target.dataset.dayIdx);
+          if (idx !== window._portalSelectedDay) setPortalActiveDay(ws, idx, false);
+          centerPortalDayPill(idx, "smooth");
+          requestAnimationFrame(updateEpDayStripDepth);
         }
       });
-    }, { passive: true });
+    }, { root: carousel, threshold: 0.5 });
+    slides.forEach(slide => observer.observe(slide));
   });
 }
 

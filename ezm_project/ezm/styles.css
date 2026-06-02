@@ -3873,22 +3873,17 @@ body.employee-mode .ep-content {
 /* Carousel container — horizontal scroll snap */
 .ep-days-carousel {
   display: flex;
-  direction: ltr;
-  overflow-x: scroll;
+  overflow-x: auto;
   scroll-snap-type: x mandatory;
   -webkit-overflow-scrolling: touch;
-  overscroll-behavior-x: contain;
-  touch-action: pan-x pan-y;
   scrollbar-width: none;
-  gap: 12px;
+  gap: 14px;
   padding: 0 calc(7.5vw) 16px;   /* side padding so neighbours peek */
-  scroll-padding-inline: calc(7.5vw);
 }
 .ep-days-carousel::-webkit-scrollbar { display: none; }
 
 /* Each slide */
 .ep-day-slide {
-  direction: rtl;
   flex: 0 0 85vw;
   max-width: 420px;
   scroll-snap-align: center;
@@ -3896,14 +3891,15 @@ body.employee-mode .ep-content {
   border-radius: 20px;
   box-shadow: 0 2px 16px rgba(0,0,0,.08);
   overflow: hidden;
-  will-change: transform, opacity;
-  transition: box-shadow .18s ease;
-  opacity: var(--ep-slide-opacity, .55);
-  transform: translate3d(0, 0, 0) scale(var(--ep-slide-scale, .94));
+  opacity: .55;
+  transform: scale(.94);
+  transition: transform .25s, box-shadow .25s, opacity .25s;
 }
 
 /* Active slide — centered */
 .ep-day-slide.ep-slide-active {
+  opacity: 1;
+  transform: scale(1);
   box-shadow: 0 6px 28px rgba(0,0,0,.14);
 }
 
@@ -3911,14 +3907,12 @@ body.employee-mode .ep-content {
 @media (min-width: 600px) {
   .ep-days-carousel {
     padding: 0 calc(10vw) 16px;
-    scroll-padding-inline: calc(10vw);
   }
   .ep-day-slide { flex: 0 0 75vw; max-width: 480px; }
 }
 @media (min-width: 900px) {
   .ep-days-carousel {
     padding: 0 calc(15vw) 16px;
-    scroll-padding-inline: calc(15vw);
   }
   .ep-day-slide { flex: 0 0 60vw; max-width: 540px; }
 }
@@ -4333,19 +4327,33 @@ body.employee-mode .ep-day-strip {
   position: relative;
   justify-content: flex-start;
   gap: 8px;
-  margin: 0 -4px;
-  padding: 7px calc(50% - 27px) 18px;
-  min-height: 92px;
+  margin: 0;
+  padding: 6px calc(50% - 27px);
+  min-height: 82px;
+  background: transparent !important;
+  background-image: none !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  isolation: auto;
   overflow-x: auto;
+  overflow-y: visible;
   scroll-snap-type: x mandatory;
   scroll-behavior: auto;
-  mask-image: linear-gradient(90deg, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  mask-image: none !important;
+  -webkit-mask-image: none !important;
+}
+body.employee-mode .ep-day-strip::before,
+body.employee-mode .ep-day-strip::after {
+  content: none !important;
 }
 body.employee-mode .ep-day-pill {
   min-width: 54px;
-  min-height: 64px;
+  min-height: 54px;
   border-radius: 22px;
-  padding: 8px 8px;
+  padding: 6px 8px;
   background: rgba(255,255,255,.50);
   border: 1px solid rgba(255,255,255,.68);
   color: var(--ep-muted);
@@ -4373,7 +4381,7 @@ body.employee-mode .ep-day-pill.active {
   background: #fff;
   border-color: #fff;
   color: var(--accent);
-  box-shadow: 0 14px 34px rgba(244,120,32,.20), 0 8px 20px rgba(31,41,55,.08);
+  box-shadow: none;
 }
 body.employee-mode .ep-day-pill.active .ep-pill-name,
 body.employee-mode .ep-day-pill.active .ep-pill-num,
