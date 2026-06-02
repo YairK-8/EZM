@@ -54,6 +54,8 @@ _err_count:   list[int] = [0]
 _req_log: deque = deque(maxlen=500)   # (timestamp, duration_ms, is_error: bool)
 APP_TZ = ZoneInfo(os.environ.get("EZM_TIMEZONE", "Asia/Jerusalem"))
 _scheduler_started = False
+_event_condition = threading.Condition()
+_event_version = 0
 SHIFT_SLOTS = ("morning", "middle", "evening")
 DEFAULT_SHIFT_SLOTS = ("morning", "evening")
 SHIFT_SLOT_LABELS = {"morning": "בוקר", "middle": "אמצע", "evening": "ערב"}
@@ -722,6 +724,7 @@ def reinforcement_candidates(conn: sqlite3.Connection, auth: dict, shift_id: int
 
 def json_response(handler: SimpleHTTPRequestHandler, status: int, payload: dict) -> None:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    handler._last_status = status
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
@@ -735,6 +738,31 @@ def json_response(handler: SimpleHTTPRequestHandler, status: int, payload: dict)
     if t0 is not None:
         _req_log.append((t0, round((time.time() - t0) * 1000), status >= 400))
         handler._req_start = None
+
+
+def data_change_payload(handler: SimpleHTTPRequestHandler, path: str, method: str) -> dict | None:
+    if not path.startswith("/api/") or method.upper() == "GET":
+        return None
+    if path.startswith("/api/auth") or path.startswith("/api/dev") or path.startswith("/api/setup"):
+        return None
+    status = getattr(handler, "_last_status", 500)
+    if status >= 400:
+        return None
+    return {
+        "path": path,
+        "method": method.upper(),
+        "sourceClientId": handler.headers.get("X-EZM-Client-ID", ""),
+        "ts": int(time.time()),
+    }
+
+
+def notify_data_changed(payload: dict) -> None:
+    global _event_version
+    with _event_condition:
+        _event_version += 1
+        payload["version"] = _event_version
+        _event_condition.payload = payload
+        _event_condition.notify_all()
 
 
 def read_json(handler: SimpleHTTPRequestHandler) -> dict:
@@ -1254,7 +1282,7 @@ class EZMHandler(SimpleHTTPRequestHandler):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-EZM-Client-ID")
         self.end_headers()
 
     def do_GET(self) -> None:
@@ -1270,6 +1298,9 @@ class EZMHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/"):
             _req_count[0] += 1; self._req_start = time.time()
             self.route_post(parsed.path)
+            payload = data_change_payload(self, parsed.path, "POST")
+            if payload:
+                notify_data_changed(payload)
             return
         json_response(self, 404, {"error": "not_found"})
 
@@ -1278,6 +1309,9 @@ class EZMHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/"):
             _req_count[0] += 1; self._req_start = time.time()
             self.route_put(parsed.path)
+            payload = data_change_payload(self, parsed.path, "PUT")
+            if payload:
+                notify_data_changed(payload)
             return
         json_response(self, 404, {"error": "not_found"})
 
@@ -1286,6 +1320,9 @@ class EZMHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/"):
             _req_count[0] += 1; self._req_start = time.time()
             self.route_delete(parsed.path)
+            payload = data_change_payload(self, parsed.path, "DELETE")
+            if payload:
+                notify_data_changed(payload)
             return
         json_response(self, 404, {"error": "not_found"})
 
@@ -1301,6 +1338,42 @@ class EZMHandler(SimpleHTTPRequestHandler):
                 c = conn.execute("SELECT COUNT(*) AS c FROM users WHERE role='network-manager' AND status='active'").fetchone()["c"]
             json_response(self, 200, {"required": c == 0})
             return
+
+        if path == "/api/events":
+            token = qs.get("token", [""])[0]
+            payload = verify_token(token)
+            if not payload:
+                json_response(self, 401, {"error": "unauthorized"})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(b": connected\n\n")
+            self.wfile.flush()
+            last_seen = int(self.headers.get("Last-Event-ID") or qs.get("lastEventId", ["0"])[0] or 0)
+            while True:
+                with _event_condition:
+                    current_payload = getattr(_event_condition, "payload", None)
+                    if not current_payload or int(current_payload.get("version", 0)) <= last_seen:
+                        _event_condition.wait(timeout=25)
+                        current_payload = getattr(_event_condition, "payload", None)
+                if current_payload and int(current_payload.get("version", 0)) > last_seen:
+                    last_seen = int(current_payload["version"])
+                    data = json.dumps(current_payload, ensure_ascii=False)
+                    try:
+                        self.wfile.write(f"id: {last_seen}\nevent: data_changed\ndata: {data}\n\n".encode("utf-8"))
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, TimeoutError):
+                        return
+                else:
+                    try:
+                        self.wfile.write(b": heartbeat\n\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, TimeoutError):
+                        return
 
         if path == "/api/public/branches":
             with db() as conn:

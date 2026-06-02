@@ -25,6 +25,11 @@ function clearStoredToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
 
+function makeClientId() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return `client-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 // ── State ─────────────────────────────────────────────────────────────────────
 const app = {
   token:        getStoredToken(),
@@ -42,11 +47,15 @@ const app = {
   activeView: null,
   refreshTimer: null,
   refreshInFlight: false,
-  autoRefreshStarted: false,
+  realtimeStarted: false,
+  realtimeVisibilityBound: false,
+  eventSource: null,
+  clientId: localStorage.getItem("ezm_client_id") || makeClientId(),
   setupRequired: false,
   reinforcementPromptKey: "",
   suppressReinforcementPrompt: false,
 };
+localStorage.setItem("ezm_client_id", app.clientId);
 
 // ── Date helpers ───────────────────────────────────────────────────────────────
 function todayWeekStart() {
@@ -220,6 +229,7 @@ async function api(method, path, body) {
     headers: { "Content-Type": "application/json" },
   };
   if (app.token) opts.headers.Authorization = `Bearer ${app.token}`;
+  if (app.clientId) opts.headers["X-EZM-Client-ID"] = app.clientId;
   if (body !== undefined) opts.body = JSON.stringify(body);
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
@@ -229,28 +239,13 @@ async function api(method, path, body) {
     err.data = data;
     throw err;
   }
-  maybeScheduleRefreshAfterMutation(method, path);
   return data;
-}
-
-function shouldRefreshAfterMutation(method, path) {
-  if (String(method).toUpperCase() === "GET") return false;
-  if (!app.user || !path.startsWith("/api/")) return false;
-  if (path.startsWith("/api/auth") || path.startsWith("/api/dev") || path.startsWith("/api/setup")) return false;
-  if (String(method).toUpperCase() === "POST" && path === "/api/weeks") return false;
-  return true;
-}
-
-function maybeScheduleRefreshAfterMutation(method, path) {
-  if (!shouldRefreshAfterMutation(method, path)) return;
-  app.currentWeek = null;
-  scheduleActiveViewRefresh(250);
 }
 
 function scheduleActiveViewRefresh(delay = 0) {
   if (!app.activeView || app.activeView === "auth") return;
   clearTimeout(app.refreshTimer);
-  app.refreshTimer = setTimeout(() => refreshActiveView("mutation"), delay);
+  app.refreshTimer = setTimeout(() => refreshActiveView("event"), delay);
 }
 
 function modalIsOpen() {
@@ -264,7 +259,7 @@ async function refreshActiveView(reason = "auto") {
     await refreshCoreData();
     if (app.activeView === "schedule") {
       app.currentWeek = null;
-      await loadWeekView({ ensureWeek: reason !== "poll" });
+      await loadWeekView({ ensureWeek: true });
     } else if (app.activeView === "employees") {
       renderEmployees();
     } else if (app.activeView === "requests") {
@@ -291,15 +286,39 @@ async function refreshActiveView(reason = "auto") {
 }
 
 function startAutoRefresh() {
-  if (app.autoRefreshStarted) return;
-  app.autoRefreshStarted = true;
-  setInterval(() => {
-    if (!app.user || app.activeView === "auth" || app.activeView === "developer") return;
-    refreshActiveView("poll");
-  }, 12000);
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) scheduleActiveViewRefresh(150);
+  startRealtimeEvents();
+  if (!app.realtimeVisibilityBound) {
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && app.eventSource) scheduleActiveViewRefresh(150);
+    });
+    app.realtimeVisibilityBound = true;
+  }
+}
+
+function startRealtimeEvents() {
+  if (app.realtimeStarted || !app.token || !window.EventSource) return;
+  app.realtimeStarted = true;
+  const url = `/api/events?token=${encodeURIComponent(app.token)}`;
+  app.eventSource = new EventSource(url);
+  app.eventSource.addEventListener("data_changed", event => {
+    let payload = {};
+    try { payload = JSON.parse(event.data || "{}"); } catch {}
+    if (payload.sourceClientId && payload.sourceClientId === app.clientId) return;
+    app.currentWeek = null;
+    scheduleActiveViewRefresh(80);
   });
+  app.eventSource.onerror = () => {
+    app.realtimeStarted = false;
+    app.eventSource?.close();
+    app.eventSource = null;
+    if (app.user && app.token) setTimeout(startRealtimeEvents, 3000);
+  };
+}
+
+function stopRealtimeEvents() {
+  app.realtimeStarted = false;
+  app.eventSource?.close();
+  app.eventSource = null;
 }
 
 // ── Role helpers ───────────────────────────────────────────────────────────────
@@ -652,6 +671,7 @@ async function enterApp() {
 }
 
 async function logout() {
+  stopRealtimeEvents();
   app.token = "";
   app.user  = null;
   app.currentWeek = null;
