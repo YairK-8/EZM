@@ -1645,7 +1645,7 @@ function openScheduleShiftModal(shift) {
       if (assignment && user) openEditHoursModal(assignment, user, shift);
     });
   });
-  document.getElementById("cancelModalBtn").addEventListener("click", closeModal);
+  document.getElementById("cancelModalBtn")?.addEventListener("click", closeModal);
   renderReinforcementCandidates(shift, "modalReinforcementCandidates", locked);
 }
 
@@ -3215,6 +3215,7 @@ async function renderPortal() {
   grid.innerHTML = "";
 
   if (!app.currentBranch) {
+    document.getElementById("portalCalendarRow")?.classList.add("hidden");
     grid.innerHTML = `<div style="text-align:center;padding:40px 20px;color:var(--text3);">אין עדיין סניף פעיל להגשת זמינות.</div>`;
     return;
   }
@@ -3231,6 +3232,7 @@ async function renderPortal() {
 
   // Render the day strip
   renderEpDayStrip(ws, weekData, dayIdx, reinforcementRequests);
+  renderPortalCalendarButton(ws, weekData, reinforcementRequests);
 
   // Render content for selected day
   renderEpDayContent(ws, dk, dayIdx, weekData, reinforcementRequests, taxiRequests);
@@ -3275,6 +3277,150 @@ async function getPortalTaxiRequests() {
     console.warn("getPortalTaxiRequests error", e);
     return [];
   }
+}
+
+function icsEscape(value) {
+  return String(value ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/,/g, "\\,")
+    .replace(/;/g, "\\;");
+}
+
+function icsDateTime(date, time) {
+  const [hh = "00", mm = "00"] = String(time || "00:00").split(":");
+  const d = new Date(date);
+  d.setHours(Number(hh), Number(mm), 0, 0);
+  const pad = n => String(n).padStart(2, "0");
+  return {
+    date: d,
+    value: `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}T${pad(d.getHours())}${pad(d.getMinutes())}00`,
+  };
+}
+
+function icsUtcStamp(date = new Date()) {
+  const pad = n => String(n).padStart(2, "0");
+  return `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}T${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}Z`;
+}
+
+function icsReminderDayBeforeAtSix(eventDate) {
+  const reminderDate = new Date(eventDate);
+  reminderDate.setDate(reminderDate.getDate() - 1);
+  return icsDateTime(reminderDate, "18:00").value;
+}
+
+function parseShiftHoursForCalendar(hours = "") {
+  const parts = String(hours).replace("–", "-").split("-").map(p => p.trim());
+  return parts.length === 2 && parts[0] && parts[1] ? { start: parts[0], end: parts[1] } : null;
+}
+
+function buildPortalCalendarEvents(ws, weekData, reinforcementRequests = []) {
+  const isPublished = weekData?.status === "published" || weekData?.status === "closed";
+  if (!isPublished || !app.user) return [];
+
+  const events = [];
+  const seen = new Set();
+  (weekData?.shifts || []).forEach(shift => {
+    const myAssign = shift.assignments?.find(a => Number(a.userId) === Number(app.user.id));
+    if (!myAssign) return;
+    const hours = (myAssign.startTime && myAssign.endTime)
+      ? { start: myAssign.startTime, end: myAssign.endTime }
+      : parseShiftHoursForCalendar(shift.hours);
+    const dayIdx = DAY_KEYS.indexOf(shift.dayKey);
+    if (!hours || dayIdx < 0) return;
+    const key = `shift:${shift.id}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    events.push({
+      uid: `ezm-shift-${shift.id}-${app.user.id}@ezm`,
+      date: parseIso(addDays(ws, dayIdx)),
+      start: hours.start,
+      end: hours.end,
+      title: `${shiftFullLabel(shift.slot)} - ${app.currentBranch?.name || "EZM"}`,
+      location: app.currentBranch?.name || "",
+      description: `משמרת רגילה${myAssign.startTime && myAssign.endTime ? " · שעות אישיות" : ""}`,
+    });
+  });
+
+  (reinforcementRequests || [])
+    .filter(r => r.status === "approved" && r.shift?.weekStart === ws)
+    .forEach(r => {
+      const hours = parseShiftHoursForCalendar(r.shift?.hours || "");
+      const dayIdx = DAY_KEYS.indexOf(r.shift?.dayKey);
+      if (!hours || dayIdx < 0) return;
+      if (seen.has(`shift:${r.shiftId}`)) return;
+      const key = `reinf:${r.id || r.shiftId}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const branchName = r.branch?.name || "סניף אחר";
+      events.push({
+        uid: `ezm-reinforcement-${r.id || r.shiftId}-${app.user.id}@ezm`,
+        date: parseIso(addDays(ws, dayIdx)),
+        start: hours.start,
+        end: hours.end,
+        title: `${shiftFullLabel(r.shift?.slot)} תגבור - ${branchName}`,
+        location: branchName,
+        description: "תגבור מאושר",
+      });
+    });
+
+  return events.sort((a, b) => a.date - b.date || a.start.localeCompare(b.start));
+}
+
+function downloadPortalCalendar(events, ws) {
+  if (!events.length) return;
+  const stamp = icsUtcStamp();
+  const lines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//EZM//Schedule//HE",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+  ];
+  events.forEach(event => {
+    const start = icsDateTime(event.date, event.start);
+    const end = icsDateTime(event.date, event.end);
+    if (end.date <= start.date) end.date.setDate(end.date.getDate() + 1);
+    const endValue = icsDateTime(end.date, event.end).value;
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:${icsEscape(event.uid)}`,
+      `DTSTAMP:${stamp}`,
+      `DTSTART:${start.value}`,
+      `DTEND:${endValue}`,
+      `SUMMARY:${icsEscape(event.title)}`,
+      event.location ? `LOCATION:${icsEscape(event.location)}` : "",
+      event.description ? `DESCRIPTION:${icsEscape(event.description)}` : "",
+      "BEGIN:VALARM",
+      "ACTION:DISPLAY",
+      "DESCRIPTION:תזכורת למשמרת מחר",
+      `TRIGGER;VALUE=DATE-TIME:${icsReminderDayBeforeAtSix(event.date)}`,
+      "END:VALARM",
+      "END:VEVENT",
+    );
+  });
+  lines.push("END:VCALENDAR");
+  const blob = new Blob([lines.filter(Boolean).join("\r\n")], { type: "text/calendar;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `EZM_${app.user.fullName || "schedule"}_${ws}.ics`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function renderPortalCalendarButton(ws, weekData, reinforcementRequests = []) {
+  const row = document.getElementById("portalCalendarRow");
+  if (!row) return;
+  const events = buildPortalCalendarEvents(ws, weekData, reinforcementRequests);
+  if (!events.length) {
+    row.classList.add("hidden");
+    row.innerHTML = "";
+    return;
+  }
+  row.classList.remove("hidden");
+  row.innerHTML = `<button class="ep-calendar-btn" id="portalCalendarBtn" type="button">📅 הוסף ליומן</button>`;
+  document.getElementById("portalCalendarBtn")?.addEventListener("click", () => downloadPortalCalendar(events, ws));
 }
 
 function taxiDirectionLabel(direction) {
