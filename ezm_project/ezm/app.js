@@ -42,6 +42,7 @@ const app = {
   activeView: null,
   setupRequired: false,
   employeeBranchFilter: "",
+  employeesMissingAvailabilityOnly: false,
   assignmentBranchFilter: "",
   reinforcementBranchFilter: "",
   reinforcementPromptKey: "",
@@ -2263,11 +2264,27 @@ function bindEmployeeListBranchFilter(id, stateKey, renderFn) {
   });
 }
 
+async function loadEmployeeListWeeks(branchFilter) {
+  const weekStart = app.weekStart || todayWeekStart();
+  const branchIds = branchFilter
+    ? [Number(branchFilter)]
+    : (app.branches || []).map(b => b.id);
+  const uniqueIds = [...new Set(branchIds.filter(Boolean))];
+  const weeks = await Promise.all(uniqueIds.map(async branchId => {
+    if (app.currentWeek?.branchId === branchId && app.currentWeek?.weekStart === weekStart) {
+      return app.currentWeek;
+    }
+    return fetchWeekSafe(branchId, weekStart);
+  }));
+  return weeks.filter(Boolean);
+}
+
 async function renderEmployees() {
   const search  = document.getElementById("employeeSearch").value.trim().toLowerCase();
   const rank    = document.getElementById("rankFilter").value;
   const status  = document.getElementById("statusFilter").value;
   const branchFilter = renderEmployeeBranchFilter();
+  const weekData = await loadEmployeeListWeeks(branchFilter);
 
   let users = app.users;
   if (status !== "all") users = users.filter(u => u.status === status);
@@ -2279,8 +2296,12 @@ async function renderEmployees() {
   );
   if (rank === "managers") users = users.filter(u => u.role !== "employee");
   else if (rank !== "all") users = users.filter(u => u.rank === rank);
+  if (app.employeesMissingAvailabilityOnly) {
+    users = users.filter(u => employeeShiftStats(weekData, u.id).availability === 0);
+  }
 
   updatePendingBadge();
+  document.getElementById("missingAvailabilityEmployeesBtn")?.classList.toggle("active", app.employeesMissingAvailabilityOnly);
 
   const list = document.getElementById("employeeList");
   list.innerHTML = "";
@@ -2291,6 +2312,7 @@ async function renderEmployees() {
   }
 
   users.forEach(u => {
+    const stats = employeeShiftStats(weekData, u.id);
     const btn = document.createElement("button");
     btn.className = "employee-item";
     btn.type = "button";
@@ -2301,6 +2323,9 @@ async function renderEmployees() {
       <div style="flex:1;min-width:0">
         <strong>${u.fullName}</strong>
         <small>${u.idNumber || ""}</small>
+        <span class="employee-week-stats ${stats.availability ? "" : "is-empty"}">
+          הגיש ${stats.availability} · שובץ ${stats.assignments}
+        </span>
       </div>
       <span class="tag ${tagClass}">${tagLabel}</span>`;
     btn.addEventListener("click", () => showEmployeeDetail(u.id));
@@ -4697,6 +4722,10 @@ async function bootstrap() {
   document.getElementById("statusFilter").addEventListener("change", renderEmployees);
   document.getElementById("employeeBranchFilter")?.addEventListener("change", e => {
     app.employeeBranchFilter = e.target.value || "";
+    renderEmployees();
+  });
+  document.getElementById("missingAvailabilityEmployeesBtn")?.addEventListener("click", () => {
+    app.employeesMissingAvailabilityOnly = !app.employeesMissingAvailabilityOnly;
     renderEmployees();
   });
   document.getElementById("pendingEmployeesBtn").addEventListener("click", () => {

@@ -346,9 +346,14 @@
               <select id="employeeBranchFilter" class="employee-branch-filter hidden">
                 <option value="">כל הסניפים</option>
               </select>
-              <button class="pending-filter-btn" id="pendingEmployeesBtn" type="button">
-                ממתינים <span id="pendingEmployeesCount" hidden>0</span>
-              </button>
+              <div class="employee-filter-actions">
+                <button class="pending-filter-btn" id="missingAvailabilityEmployeesBtn" type="button">
+                  לא הגישו
+                </button>
+                <button class="pending-filter-btn" id="pendingEmployeesBtn" type="button">
+                  ממתינים <span id="pendingEmployeesCount" hidden>0</span>
+                </button>
+              </div>
             </div>
             <div class="employee-list-body" id="employeeList"></div>
           </div>
