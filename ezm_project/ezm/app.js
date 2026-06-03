@@ -2265,7 +2265,7 @@ function bindEmployeeListBranchFilter(id, stateKey, renderFn) {
 }
 
 async function loadEmployeeListWeeks(branchFilter) {
-  const weekStart = app.weekStart || todayWeekStart();
+  const weekStart = employeeListTrackingWeekStart();
   const branchIds = branchFilter
     ? [Number(branchFilter)]
     : (app.branches || []).map(b => b.id);
@@ -2277,6 +2277,12 @@ async function loadEmployeeListWeeks(branchFilter) {
     return fetchWeekSafe(branchId, weekStart);
   }));
   return weeks.filter(Boolean);
+}
+
+function employeeListTrackingWeekStart() {
+  const currentWeekStart = todayWeekStart();
+  const selectedWeekStart = app.weekStart || currentWeekStart;
+  return selectedWeekStart > currentWeekStart ? selectedWeekStart : addDays(currentWeekStart, 7);
 }
 
 async function renderEmployees() {
