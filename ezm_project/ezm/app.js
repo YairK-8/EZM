@@ -41,6 +41,9 @@ const app = {
   openSelectedShiftAfterLoad: false,
   activeView: null,
   setupRequired: false,
+  employeeBranchFilter: "",
+  assignmentBranchFilter: "",
+  reinforcementBranchFilter: "",
   reinforcementPromptKey: "",
   suppressReinforcementPrompt: false,
 };
@@ -1357,6 +1360,18 @@ function availableUsersForShift(shift) {
   return availUsers;
 }
 
+function assignmentBranchFilteredUsers(users) {
+  const branchId = app.assignmentBranchFilter || "";
+  return branchId ? users.filter(x => employeeHasBranch(x.user, branchId)) : users;
+}
+
+function reinforcementBranchFilteredCandidates(candidates) {
+  const branchId = app.reinforcementBranchFilter || "";
+  return branchId
+    ? candidates.filter(c => (c.branches || []).some(b => Number(b.id) === Number(branchId)))
+    : candidates;
+}
+
 function canRequestCrossBranchReinforcement() {
   return app.user?.role === "network-manager" || app.user?.role === "area-manager";
 }
@@ -1410,18 +1425,21 @@ async function renderReinforcementCandidates(shift, containerId, locked = false)
   container.innerHTML = `<div class="empty-state" style="padding:12px">טוען עובדים פנויים...</div>`;
   try {
     const data = await api("GET", `/api/shifts/${shift.id}/reinforcement-candidates`);
-    const candidates = data.candidates || [];
-    if (!candidates.length) {
+    const allCandidates = data.candidates || [];
+    const filterId = `reinforcementBranchFilter-${containerId}`;
+    const candidates = reinforcementBranchFilteredCandidates(allCandidates);
+    if (!allCandidates.length) {
       container.innerHTML = `<div class="empty-state" style="padding:12px">אין עובדים פנויים מסניפים אחרים.</div>`;
       return;
     }
     const targetCount = Number(shift.shortage?.count || 0);
     container.innerHTML = `
+      ${employeeListBranchSelectHtml(filterId, app.reinforcementBranchFilter, "compact")}
       <div class="bulk-request-bar">
-        <span>${targetCount ? `נדרש תגבור: ${targetCount}` : "אפשר לשלוח לכמה עובדים"}</span>
+        <span>${targetCount ? `נדרש תגבור: ${targetCount}` : "אפשר לשלוח לכמה עובדים"}${app.reinforcementBranchFilter ? ` · ${candidates.length} מוצגים` : ""}</span>
         <button class="btn btn-primary btn-xs" type="button" data-request-selected-reinforcement ${locked ? "disabled" : ""}>שלח למסומנים</button>
       </div>
-      ${candidates.map(c => {
+      ${candidates.length ? candidates.map(c => {
       const branches = (c.branches || []).map(b => b.name).join(", ");
       return `
         <div class="person-row">
@@ -1436,7 +1454,8 @@ async function renderReinforcementCandidates(shift, containerId, locked = false)
             ${c.pending ? "בטל בקשה" : "בקש תגבור"}
           </button>
         </div>`;
-    }).join("")}`;
+    }).join("") : `<div class="empty-state" style="padding:12px">אין עובדים פנויים בסינון הזה.</div>`}`;
+    bindEmployeeListBranchFilter(filterId, "reinforcementBranchFilter", () => renderReinforcementCandidates(shift, containerId, locked));
     container.querySelectorAll("[data-request-reinforcement]").forEach(btn => {
       btn.addEventListener("click", async () => {
         await requestReinforcement(shift.id, Number(btn.dataset.requestReinforcement));
@@ -1530,7 +1549,7 @@ function openScheduleShiftModal(shift) {
   const label = slotLabel(shift.slot);
   const assigned = shift.assignments || [];
   const workerCountText = shiftWorkerCountTitle(shift);
-  const available = availableUsersForShift(shift);
+  const available = assignmentBranchFilteredUsers(availableUsersForShift(shift));
   modal({
     kicker: `${app.currentBranch?.name || ""} · ${shift.hours}`,
     title: `${DAY_LABELS[shift.dayKey]} ${label}`,
@@ -1568,6 +1587,7 @@ function openScheduleShiftModal(shift) {
         </section>
         <section>
           <div class="mobile-shift-builder-title">זמינים לשיבוץ</div>
+          ${employeeListBranchSelectHtml("modalAssignmentBranchFilter", app.assignmentBranchFilter, "compact")}
           <div id="modalAvailableList">
             ${available.length ? available.map(({ user: u, note }) => `
               <div class="person-row">
@@ -1645,6 +1665,7 @@ function openScheduleShiftModal(shift) {
       if (assignment && user) openEditHoursModal(assignment, user, shift);
     });
   });
+  bindEmployeeListBranchFilter("modalAssignmentBranchFilter", "assignmentBranchFilter", () => openScheduleShiftModal(shift));
   document.getElementById("cancelModalBtn")?.addEventListener("click", closeModal);
   renderReinforcementCandidates(shift, "modalReinforcementCandidates", locked);
 }
@@ -1860,7 +1881,7 @@ function renderDrawer() {
 
   // Available
   const availableList = document.getElementById("availableList");
-  availableList.innerHTML = "";
+  availableList.innerHTML = employeeListBranchSelectHtml("drawerAssignmentBranchFilter", app.assignmentBranchFilter, "compact");
   const assignedIds = new Set((shift.assignments || []).map(a => a.userId));
   let availUsers = (shift.availability || []).map(av => {
     const u = app.users.find(u => u.id === av.userId);
@@ -1878,9 +1899,10 @@ function renderDrawer() {
       availUsers = [{ user: self, note: "מנהל סניף" }, ...availUsers];
     }
   }
+  availUsers = assignmentBranchFilteredUsers(availUsers);
 
   if (!availUsers.length) {
-    availableList.innerHTML = `<div class="empty-state" style="padding:12px">אין עובדים שהגישו זמינות</div>`;
+    availableList.insertAdjacentHTML("beforeend", `<div class="empty-state" style="padding:12px">אין עובדים שהגישו זמינות</div>`);
   } else {
     availUsers.forEach(({ user: u, note }) => {
       const row = document.createElement("div");
@@ -1896,6 +1918,7 @@ function renderDrawer() {
       availableList.appendChild(row);
     });
   }
+  bindEmployeeListBranchFilter("drawerAssignmentBranchFilter", "assignmentBranchFilter", renderDrawer);
   renderReinforcementCandidates(shift, "reinforcementCandidates", locked);
 }
 
@@ -2182,14 +2205,74 @@ function openReinforcementModal(shift) {
 }
 
 // ── Employees View ────────────────────────────────────────────────────────────
+function canFilterEmployeeListsByBranch() {
+  return ["area-manager", "network-manager", "developer"].includes(app.user?.role) && app.branches.length > 1;
+}
+
+function employeeHasBranch(user, branchId) {
+  if (!branchId) return true;
+  return (user.branchIds || []).map(Number).includes(Number(branchId));
+}
+
+function branchFilterOptions(selectedValue = "") {
+  const selected = String(selectedValue || "");
+  return `<option value="" ${!selected ? "selected" : ""}>כל הסניפים</option>` +
+    app.branches.map(b => {
+      const value = String(b.id);
+      const label = b.number ? `${b.name} · ${b.number}` : b.name;
+      return `<option value="${value}" ${selected === value ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    }).join("");
+}
+
+function renderEmployeeBranchFilter() {
+  const select = document.getElementById("employeeBranchFilter");
+  if (!select) return "";
+  const canFilter = canFilterEmployeeListsByBranch();
+  select.classList.toggle("hidden", !canFilter);
+  if (!canFilter) {
+    app.employeeBranchFilter = "";
+    select.value = "";
+    return "";
+  }
+  const allowedIds = new Set(app.branches.map(b => String(b.id)));
+  if (app.employeeBranchFilter && !allowedIds.has(String(app.employeeBranchFilter))) {
+    app.employeeBranchFilter = "";
+  }
+  select.innerHTML = branchFilterOptions(app.employeeBranchFilter);
+  select.value = app.employeeBranchFilter || "";
+  return app.employeeBranchFilter || "";
+}
+
+function employeeListBranchSelectHtml(id, value = "", extraClass = "") {
+  if (!canFilterEmployeeListsByBranch()) return "";
+  return `
+    <label class="employee-branch-list-filter ${extraClass}">
+      <span>סינון סניף</span>
+      <select id="${id}">
+        ${branchFilterOptions(value)}
+      </select>
+    </label>`;
+}
+
+function bindEmployeeListBranchFilter(id, stateKey, renderFn) {
+  const select = document.getElementById(id);
+  if (!select) return;
+  select.addEventListener("change", () => {
+    app[stateKey] = select.value || "";
+    renderFn();
+  });
+}
+
 async function renderEmployees() {
   const search  = document.getElementById("employeeSearch").value.trim().toLowerCase();
   const rank    = document.getElementById("rankFilter").value;
   const status  = document.getElementById("statusFilter").value;
+  const branchFilter = renderEmployeeBranchFilter();
 
   let users = app.users;
   if (status !== "all") users = users.filter(u => u.status === status);
   else users = users.filter(u => u.status !== "pending");
+  if (branchFilter) users = users.filter(u => employeeHasBranch(u, branchFilter));
 
   if (search) users = users.filter(u =>
     u.fullName.includes(search) || (u.idNumber || "").includes(search)
@@ -2211,6 +2294,7 @@ async function renderEmployees() {
     const btn = document.createElement("button");
     btn.className = "employee-item";
     btn.type = "button";
+    btn.dataset.userId = String(u.id);
     const tagClass = u.status === "pending" ? "tag-yellow" : (u.role !== "employee" ? "tag-green" : (u.isLead ? "tag-blue" : "tag-accent"));
     const tagLabel = u.status === "pending" ? "ממתין" : (u.role !== "employee" ? "מנהל" : (u.isLead ? "אחמ\"ש" : u.rank));
     btn.innerHTML = `
@@ -2224,27 +2308,20 @@ async function renderEmployees() {
   });
 }
 
-function showEmployeeDetail(userId) {
-  // Highlight selected
-  document.querySelectorAll(".employee-item").forEach(b => b.classList.remove("active"));
-  const u = app.users.find(x => x.id === userId);
-  if (!u) return;
-
-  const detail = document.getElementById("employeeDetail");
+function employeeDetailMarkup(u, insightGridId = "employeeInsightGrid") {
   const tagClass = u.status === "pending" ? "tag-yellow" : u.status === "inactive" ? "tag-red" : "tag-green";
   const tagLabel = u.status === "pending" ? "ממתין לאישור" : u.status === "inactive" ? "לא פעיל" : "פעיל";
-
   const isSelf = u.id === app.user?.id;
   const canManage = canManageUser(u);
   const isLastNetworkManager = u.role === "network-manager" && u.status === "active" &&
     app.users.filter(x => x.role === "network-manager" && x.status === "active").length <= 1;
   const branchNames = employeeBranchNames(u);
 
-  detail.innerHTML = `
+  return `
     <div class="employee-card-header">
       <div class="employee-avatar" style="${u.status === "inactive" ? "opacity:.45;filter:grayscale(1)" : ""}">${(u.fullName||"?")[0]}</div>
       <div>
-        <h2>${u.fullName}</h2>
+        <h2>${escapeHtml(u.fullName)}</h2>
         <div style="display:flex;gap:8px;align-items:center;margin-top:4px">
           <span class="tag ${tagClass}">${tagLabel}</span>
           <small class="text-muted">${u.role !== "employee" ? "מנהל" : roleLabel(u.role)}</small>
@@ -2252,22 +2329,22 @@ function showEmployeeDetail(userId) {
       </div>
     </div>
     <div class="profile-grid">
-      <div class="field-card"><span>תעודת זהות</span><strong>${u.idNumber || "—"}</strong></div>
-      <div class="field-card"><span>טלפון</span><strong>${u.phone || "—"}</strong></div>
-      <div class="field-card"><span>מייל</span><strong>${u.email || "—"}</strong></div>
+      <div class="field-card"><span>תעודת זהות</span><strong>${escapeHtml(u.idNumber || "—")}</strong></div>
+      <div class="field-card"><span>טלפון</span><strong>${escapeHtml(u.phone || "—")}</strong></div>
+      <div class="field-card"><span>מייל</span><strong>${escapeHtml(u.email || "—")}</strong></div>
       <div class="field-card"><span>שכר שעתי</span><strong>${u.hourlyWage ? `₪${u.hourlyWage}` : "—"}</strong></div>
-      <div class="field-card"><span>דרגה</span><strong>${u.rank || "מוכרן"}</strong></div>
+      <div class="field-card"><span>דרגה</span><strong>${escapeHtml(u.rank || "מוכרן")}</strong></div>
       <div class="field-card"><span>אחמ"ש</span><strong>${u.isLead ? "כן" : "לא"}</strong></div>
-      <div class="field-card"><span>סניפים משויכים</span><strong>${branchNames || "—"}</strong></div>
+      <div class="field-card"><span>סניפים משויכים</span><strong>${escapeHtml(branchNames || "—")}</strong></div>
     </div>
-    <div class="profile-grid employee-insight-grid" id="employeeInsightGrid" data-user-id="${u.id}">
+    <div class="profile-grid employee-insight-grid" id="${insightGridId}" data-user-id="${u.id}">
       <div class="field-card"><span>זמינות השבוע</span><strong>טוען...</strong></div>
       <div class="field-card"><span>שיבוצים השבוע</span><strong>טוען...</strong></div>
       <div class="field-card"><span>בקשות פתוחות</span><strong>טוען...</strong></div>
       <div class="field-card"><span>שעות עבודה</span><strong>טוען...</strong></div>
       <div class="field-card field-card-wide"><span>הערת מנהל פנימית</span><strong>${escapeHtml(u.managerNote || "אין הערה")}</strong></div>
     </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <div class="employee-detail-actions">
       ${canManage && u.status === "pending" ? `<button class="btn btn-success btn-sm" onclick="approveEmployee(${u.id})">✓ אשר הרשמה</button>` : ""}
       ${canManage ? `<button class="btn btn-ghost btn-sm" onclick="openEditEmployeeModal(${u.id})">✏️ עריכה</button>` : ""}
       ${canManage && !isSelf && !isLastNetworkManager && u.status !== "pending" ? `
@@ -2277,7 +2354,29 @@ function showEmployeeDetail(userId) {
         </button>` : ""}
       ${canManage && !isSelf && !isLastNetworkManager ? `<button class="btn btn-danger btn-sm" onclick="deleteEmployee(${u.id})">🗑 מחק עובד</button>` : ""}
     </div>`;
-  loadEmployeeInsights(userId);
+}
+
+function showEmployeeDetail(userId) {
+  // Highlight selected
+  document.querySelectorAll(".employee-item").forEach(b => b.classList.remove("active"));
+  document.querySelector(`.employee-item[data-user-id="${userId}"]`)?.classList.add("active");
+  const u = app.users.find(x => x.id === userId);
+  if (!u) return;
+
+  const detail = document.getElementById("employeeDetail");
+  if (window.matchMedia("(max-width: 760px)").matches) {
+    modal({
+      kicker: "עובדים",
+      title: u.fullName,
+      body: `<div class="employee-detail-modal">${employeeDetailMarkup(u, "employeeInsightGridModal")}</div>`,
+      footer: `<button class="btn btn-ghost" id="cancelModalBtn" type="button">סגור</button>`
+    });
+    document.getElementById("cancelModalBtn")?.addEventListener("click", closeModal);
+    loadEmployeeInsights(userId, "employeeInsightGridModal");
+    return;
+  }
+  detail.innerHTML = employeeDetailMarkup(u, "employeeInsightGrid");
+  loadEmployeeInsights(userId, "employeeInsightGrid");
 }
 
 function employeeBranchNames(user) {
@@ -2287,6 +2386,8 @@ function employeeBranchNames(user) {
     .map(b => b.number ? `${b.name} · ${b.number}` : b.name)
     .join(", ");
 }
+
+window.showEmployeeDetail = showEmployeeDetail;
 
 function employeeMetricBranches(user) {
   if (user.branchIds?.length) return user.branchIds;
@@ -2332,8 +2433,8 @@ function openRequestTypeSummary(requests) {
     .join(" · ");
 }
 
-async function loadEmployeeInsights(userId) {
-  const grid = document.getElementById("employeeInsightGrid");
+async function loadEmployeeInsights(userId, gridId = "employeeInsightGrid") {
+  const grid = document.getElementById(gridId);
   if (!grid || Number(grid.dataset.userId) !== userId) return;
   const user = app.users.find(u => u.id === userId);
   if (!user) return;
@@ -2380,6 +2481,7 @@ window.deleteEmployee = async function(userId) {
     const ud = await api("GET", "/api/users");
     app.users = ud.users || [];
     document.getElementById("employeeDetail").innerHTML = "";
+    closeModal();
     renderEmployees();
   } catch(e) {
     if (e.data?.error === "cannot_delete_self") alert("לא ניתן למחוק את עצמך.");
@@ -2413,6 +2515,7 @@ window.approveEmployee = async function(userId) {
     const ud = await api("GET", "/api/users");
     app.users = ud.users || [];
     renderEmployees();
+    window.showEmployeeDetail?.(userId);
   } catch (e) {
     alert("שגיאה באישור עובד");
   }
@@ -2515,8 +2618,8 @@ async function loadRequests() {
     renderRequestList("swapRequests",  visibleRequests.filter(r => r.type === "swap"));
     renderRequestList("exitRequests",  visibleRequests.filter(r => r.type === "exit"));
     renderRequestList("taxiRequests",  visibleRequests.filter(r => r.type === "taxi"));
-    const week = await loadRequestsShortageWeek(selectedBranchId);
-    renderShortageRequests(week, selectedBranchId);
+    const shortageWeeks = await loadRequestsShortageWeeks(selectedBranchId);
+    renderShortageRequests(shortageWeeks, selectedBranchId);
   } catch (e) {
     console.warn("loadRequests", e);
   }
@@ -2528,19 +2631,24 @@ function renderRequestsBranchSelect() {
   const sel = document.getElementById("requestsBranchSelect");
   if (!sel) return app.currentBranch?.id || app.branches[0]?.id || null;
   const branches = app.branches || [];
+  const allowAllBranches = ["area-manager", "network-manager", "developer"].includes(app.user?.role) && branches.length > 1;
   if (!branches.length) {
     sel.innerHTML = `<option value="">אין סניפים</option>`;
     sel.disabled = true;
     app.requestsBranchId = null;
     return null;
   }
-  const previous = Number(sel.value || app.requestsBranchId || app.currentBranch?.id || 0);
-  const selected = branches.some(b => b.id === previous) ? previous : branches[0].id;
+  const rawPrevious = sel.value || (app.requestsBranchId == null ? "" : String(app.requestsBranchId)) || (allowAllBranches ? "" : String(app.currentBranch?.id || branches[0].id));
+  const previous = Number(rawPrevious || 0);
+  const selected = allowAllBranches && rawPrevious === ""
+    ? null
+    : (branches.some(b => b.id === previous) ? previous : branches[0].id);
   app.requestsBranchId = selected;
-  sel.innerHTML = branches.map(b => `
+  sel.innerHTML = `${allowAllBranches ? `<option value="" ${selected == null ? "selected" : ""}>כל הסניפים</option>` : ""}` + branches.map(b => `
     <option value="${b.id}" ${b.id === selected ? "selected" : ""}>${b.name}${b.number ? " · " + b.number : ""}</option>
   `).join("");
-  sel.disabled = branches.length === 1;
+  sel.value = selected == null ? "" : String(selected);
+  sel.disabled = branches.length === 1 && !allowAllBranches;
   sel.closest(".page-header-actions")?.classList.toggle("hidden", branches.length <= 1 && app.user?.role === "branch-manager");
   return selected;
 }
@@ -2554,6 +2662,18 @@ async function loadRequestsShortageWeek(branchId) {
     if (e.status !== 404) console.warn("loadRequestsShortageWeek", e);
     return null;
   }
+}
+
+async function loadRequestsShortageWeeks(branchId) {
+  if (branchId) {
+    const week = await loadRequestsShortageWeek(branchId);
+    return week ? [{ branchId, week }] : [];
+  }
+  const entries = await Promise.all((app.branches || []).map(async branch => {
+    const week = await loadRequestsShortageWeek(branch.id);
+    return week ? { branchId: branch.id, week } : null;
+  }));
+  return entries.filter(Boolean);
 }
 
 function reminderSlotHTML(slot = { day: 1, time: "18:00" }) {
@@ -2727,20 +2847,30 @@ window.resolveRequest = async function(id, status) {
   }
 };
 
-function renderShortageRequests(week = app.currentWeek, branchId = app.currentBranch?.id) {
+function renderShortageRequests(weekEntries = [], selectedBranchId = app.currentBranch?.id) {
   const el = document.getElementById("shortageRequests");
   if (!el) return;
-  if (!week) {
-    el.innerHTML = `<div class="empty-state" style="padding:14px">אין לוז שבועי פתוח לסניף הזה בשבוע הנבחר.</div>`;
+  const entries = Array.isArray(weekEntries)
+    ? weekEntries
+    : (weekEntries ? [{ branchId: selectedBranchId, week: weekEntries }] : []);
+  if (!entries.length) {
+    el.innerHTML = `<div class="empty-state" style="padding:14px">${selectedBranchId ? "אין לוז שבועי פתוח לסניף הזה בשבוע הנבחר." : "אין לוז שבועי פתוח לסניפים בשבוע הנבחר."}</div>`;
     return;
   }
-  const shortages = (week.shifts || []).filter(s => s.shortage);
+  const shortages = entries.flatMap(entry =>
+    (entry.week?.shifts || []).filter(s => s.shortage).map(shift => ({
+      shift,
+      week: entry.week,
+      branchId: entry.branchId,
+    }))
+  );
   if (!shortages.length) {
     el.innerHTML = `<div class="empty-state" style="padding:14px">אין חוסרים פתוחים.</div>`;
     return;
   }
-  const branchName = app.branches.find(b => b.id === Number(branchId))?.name || app.currentBranch?.name || "";
-  el.innerHTML = shortages.map(s => {
+  el.innerHTML = shortages.map(({ shift: s, week, branchId }) => {
+    const branch = app.branches.find(b => b.id === Number(branchId));
+    const branchName = branch ? `${branch.name}${branch.number ? " · " + branch.number : ""}` : "";
     const label = slotLabel(s.slot);
     return `
       <div class="request-row">
@@ -4565,6 +4695,10 @@ async function bootstrap() {
   document.getElementById("employeeSearch").addEventListener("input", renderEmployees);
   document.getElementById("rankFilter").addEventListener("change", renderEmployees);
   document.getElementById("statusFilter").addEventListener("change", renderEmployees);
+  document.getElementById("employeeBranchFilter")?.addEventListener("change", e => {
+    app.employeeBranchFilter = e.target.value || "";
+    renderEmployees();
+  });
   document.getElementById("pendingEmployeesBtn").addEventListener("click", () => {
     document.getElementById("statusFilter").value = "pending";
     renderEmployees();
