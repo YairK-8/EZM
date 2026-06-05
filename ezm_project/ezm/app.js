@@ -47,6 +47,9 @@ const app = {
   reinforcementBranchFilter: "",
   reinforcementPromptKey: "",
   suppressReinforcementPrompt: false,
+  realtimeSource: null,
+  realtimeTimer: null,
+  lastLocalWriteAt: 0,
 };
 
 // ── Date helpers ───────────────────────────────────────────────────────────────
@@ -410,6 +413,7 @@ function downloadXlsx(rows, fileName) {
 
 // ── API ────────────────────────────────────────────────────────────────────────
 async function api(method, path, body) {
+  const isMutation = ["POST", "PUT", "DELETE"].includes(String(method).toUpperCase());
   const opts = {
     method,
     headers: { "Content-Type": "application/json" },
@@ -424,7 +428,90 @@ async function api(method, path, body) {
     err.data = data;
     throw err;
   }
+  if (isMutation && !path.startsWith("/api/auth") && !path.startsWith("/api/dev")) {
+    app.lastLocalWriteAt = Date.now();
+  }
   return data;
+}
+
+function startRealtime() {
+  stopRealtime();
+  if (!app.token || typeof EventSource === "undefined") return;
+  const source = new EventSource(`/api/events?token=${encodeURIComponent(app.token)}`);
+  source.addEventListener("change", () => {
+    if (Date.now() - app.lastLocalWriteAt < 900) return;
+    scheduleRealtimeRefresh();
+  });
+  source.onerror = () => {
+    if (app.realtimeSource !== source) return;
+    stopRealtime();
+    if (app.token) {
+      window.setTimeout(() => {
+        if (app.token && !app.realtimeSource) startRealtime();
+      }, 2500);
+    }
+  };
+  app.realtimeSource = source;
+}
+
+function stopRealtime() {
+  if (app.realtimeSource) {
+    app.realtimeSource.close();
+    app.realtimeSource = null;
+  }
+  if (app.realtimeTimer) {
+    clearTimeout(app.realtimeTimer);
+    app.realtimeTimer = null;
+  }
+}
+
+function scheduleRealtimeRefresh(delay = 500) {
+  if (!app.user || app.activeView === "auth") return;
+  if (app.realtimeTimer) clearTimeout(app.realtimeTimer);
+  app.realtimeTimer = setTimeout(async () => {
+    app.realtimeTimer = null;
+    const modalOpen = !document.getElementById("modalBackdrop")?.hidden;
+    if (modalOpen) {
+      scheduleRealtimeRefresh(900);
+      return;
+    }
+    await refreshActiveViewFromRealtime();
+  }, delay);
+}
+
+async function refreshActiveViewFromRealtime() {
+  try {
+    switch (app.activeView) {
+      case "schedule":
+        await refreshCoreData();
+        await loadWeekView({ ensureWeek: false });
+        break;
+      case "employees":
+        await refreshCoreData();
+        await renderEmployees();
+        break;
+      case "requests":
+        await loadRequests();
+        break;
+      case "reports":
+        await loadReports();
+        break;
+      case "area":
+        await loadAreaView();
+        break;
+      case "network":
+        await loadNetworkView();
+        break;
+      case "employeePortal":
+        await renderPortal();
+        break;
+      case "employeeRequests":
+        await renderPortalRequests();
+        break;
+    }
+  } catch (e) {
+    console.warn("realtime refresh failed", e);
+  }
 }
 
 // ── Role helpers ───────────────────────────────────────────────────────────────
@@ -739,10 +826,12 @@ async function login() {
 async function enterApp() {
   await loadInitialData();
   applyRoleAccess();
+  startRealtime();
   showView(defaultView(app.user.role));
 }
 
 async function logout() {
+  stopRealtime();
   app.token = "";
   app.user  = null;
   app.currentWeek = null;
@@ -769,6 +858,7 @@ async function devLogin() {
     app.user  = { fullName: "מפתח", role: "developer", id: 0 };
     storeToken(app.token, false);
     applyRoleAccess();
+    startRealtime();
     showView("developer");
   } catch {
     setDevNote("סיסמה שגויה.", "error");
@@ -1350,24 +1440,49 @@ function availableUsersForShift(shift) {
     const u = app.users.find(u => u.id === av.userId);
     return u ? { user: u, note: av.note } : null;
   }).filter(Boolean).filter(x => !assignedIds.has(x.user.id));
-  const branchManager = app.currentBranch?.managerId
-    ? app.users.find(u => u.id === app.currentBranch.managerId)
+  const branchId = shiftBranchId(shift);
+  const branch = branchId ? app.branches.find(b => Number(b.id) === Number(branchId)) : app.currentBranch;
+  const branchManager = branch?.managerId
+    ? app.users.find(u => u.id === branch.managerId)
     : null;
   if (branchManager && !assignedIds.has(branchManager.id) && !availUsers.some(x => x.user.id === branchManager.id)) {
     availUsers = [{ user: branchManager, note: "מנהל סניף" }, ...availUsers];
   }
-  if (app.user?.role === "branch-manager" && app.currentBranch && app.user.branchIds?.includes(app.currentBranch.id)) {
+  if (canSelfAssignToShift(shift)) {
     const self = app.users.find(u => u.id === app.user.id) || app.user;
     if (!assignedIds.has(self.id) && !availUsers.some(x => x.user.id === self.id)) {
-      availUsers = [{ user: self, note: "מנהל סניף" }, ...availUsers];
+      availUsers = [{ user: self, note: selfAssignmentLabel() }, ...availUsers];
     }
   }
   return availUsers;
 }
 
+function shiftBranchId(shift) {
+  return shift?.branchId || app.currentWeek?.branchId || app.currentBranch?.id || null;
+}
+
+function canSelfAssignToShift(shift) {
+  const role = app.user?.role;
+  if (!["branch-manager", "area-manager", "network-manager", "developer"].includes(role)) return false;
+  if (["network-manager", "developer"].includes(role)) return true;
+  const branchId = Number(shiftBranchId(shift));
+  return !!branchId && (app.user.branchIds || []).some(id => Number(id) === branchId);
+}
+
+function selfAssignmentLabel() {
+  return ({
+    "branch-manager": "שיבוץ עצמי · מנהל סניף",
+    "area-manager": "שיבוץ עצמי · מנהל אזור",
+    "network-manager": "שיבוץ עצמי · מנהל רשת",
+    "developer": "שיבוץ עצמי · מפתח",
+  })[app.user?.role] || "שיבוץ עצמי";
+}
+
 function assignmentBranchFilteredUsers(users) {
   const branchId = app.assignmentBranchFilter || "";
-  return branchId ? users.filter(x => employeeHasBranch(x.user, branchId)) : users;
+  return branchId
+    ? users.filter(x => employeeHasBranch(x.user, branchId) || (Number(x.user.id) === Number(app.user?.id) && String(x.note || "").includes("שיבוץ עצמי")))
+    : users;
 }
 
 function reinforcementBranchFilteredCandidates(candidates) {
@@ -1891,24 +2006,7 @@ function renderDrawer() {
   // Available
   const availableList = document.getElementById("availableList");
   availableList.innerHTML = employeeListBranchSelectHtml("drawerAssignmentBranchFilter", app.assignmentBranchFilter, "compact");
-  const assignedIds = new Set((shift.assignments || []).map(a => a.userId));
-  let availUsers = (shift.availability || []).map(av => {
-    const u = app.users.find(u => u.id === av.userId);
-    return u ? { user: u, note: av.note } : null;
-  }).filter(Boolean).filter(x => !assignedIds.has(x.user.id));
-  const branchManager = app.currentBranch?.managerId
-    ? app.users.find(u => u.id === app.currentBranch.managerId)
-    : null;
-  if (branchManager && !assignedIds.has(branchManager.id) && !availUsers.some(x => x.user.id === branchManager.id)) {
-    availUsers = [{ user: branchManager, note: "מנהל סניף" }, ...availUsers];
-  }
-  if (app.user?.role === "branch-manager" && app.currentBranch && app.user.branchIds?.includes(app.currentBranch.id)) {
-    const self = app.users.find(u => u.id === app.user.id) || app.user;
-    if (!assignedIds.has(self.id) && !availUsers.some(x => x.user.id === self.id)) {
-      availUsers = [{ user: self, note: "מנהל סניף" }, ...availUsers];
-    }
-  }
-  availUsers = assignmentBranchFilteredUsers(availUsers);
+  const availUsers = assignmentBranchFilteredUsers(availableUsersForShift(shift));
 
   if (!availUsers.length) {
     availableList.insertAdjacentHTML("beforeend", `<div class="empty-state" style="padding:12px">אין עובדים שהגישו זמינות</div>`);
@@ -4980,8 +5078,10 @@ async function bootstrap() {
       app.user = me.user;
       await loadInitialData();
       applyRoleAccess();
+      startRealtime();
       showView(defaultView(app.user.role));
     } catch (e) {
+      stopRealtime();
       app.token = "";
       clearStoredToken();
       applyRoleAccess();

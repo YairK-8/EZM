@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import queue
 import secrets
 import smtplib
 import socket
@@ -52,6 +53,8 @@ _SERVER_START = time.time()
 _req_count:   list[int] = [0]
 _err_count:   list[int] = [0]
 _req_log: deque = deque(maxlen=500)   # (timestamp, duration_ms, is_error: bool)
+_event_clients: set[queue.Queue] = set()
+_event_lock = threading.Lock()
 APP_TZ = ZoneInfo(os.environ.get("EZM_TIMEZONE", "Asia/Jerusalem"))
 _scheduler_started = False
 SHIFT_SLOTS = ("morning", "middle", "evening")
@@ -744,6 +747,7 @@ def reinforcement_candidates(conn: sqlite3.Connection, auth: dict, shift_id: int
 # ── HTTP helpers ──────────────────────────────────────────────────────────────
 
 def json_response(handler: SimpleHTTPRequestHandler, status: int, payload: dict) -> None:
+    handler._response_status = status
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
@@ -758,6 +762,22 @@ def json_response(handler: SimpleHTTPRequestHandler, status: int, payload: dict)
     if t0 is not None:
         _req_log.append((t0, round((time.time() - t0) * 1000), status >= 400))
         handler._req_start = None
+
+
+def broadcast_data_change(kind: str = "data") -> None:
+    payload = {"kind": kind, "ts": int(time.time())}
+    dead: list[queue.Queue] = []
+    with _event_lock:
+        clients = list(_event_clients)
+    for client in clients:
+        try:
+            client.put_nowait(payload)
+        except queue.Full:
+            dead.append(client)
+    if dead:
+        with _event_lock:
+            for client in dead:
+                _event_clients.discard(client)
 
 
 def read_json(handler: SimpleHTTPRequestHandler) -> dict:
@@ -1344,6 +1364,7 @@ class EZMHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/"):
             _req_count[0] += 1; self._req_start = time.time()
             self.route_post(parsed.path)
+            self.broadcast_after_mutation(parsed.path)
             return
         json_response(self, 404, {"error": "not_found"})
 
@@ -1352,6 +1373,7 @@ class EZMHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/"):
             _req_count[0] += 1; self._req_start = time.time()
             self.route_put(parsed.path)
+            self.broadcast_after_mutation(parsed.path)
             return
         json_response(self, 404, {"error": "not_found"})
 
@@ -1360,15 +1382,61 @@ class EZMHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/"):
             _req_count[0] += 1; self._req_start = time.time()
             self.route_delete(parsed.path)
+            self.broadcast_after_mutation(parsed.path)
             return
         json_response(self, 404, {"error": "not_found"})
 
     def log_message(self, fmt, *args):
         pass  # silence default access log
 
+    def broadcast_after_mutation(self, path: str) -> None:
+        status = getattr(self, "_response_status", None)
+        if status is None or status >= 400:
+            return
+        if path.startswith("/api/auth") or path.startswith("/api/dev"):
+            return
+        if path == "/api/weeks" and status != 201:
+            return
+        broadcast_data_change("mutation")
+
+    def stream_events(self, auth: dict) -> None:
+        client: queue.Queue = queue.Queue(maxsize=20)
+        with _event_lock:
+            _event_clients.add(client)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        try:
+            self.wfile.write(b": connected\n\n")
+            self.wfile.flush()
+            while True:
+                try:
+                    payload = client.get(timeout=25)
+                    data = json.dumps(payload, ensure_ascii=False)
+                    self.wfile.write(f"event: change\ndata: {data}\n\n".encode("utf-8"))
+                except queue.Empty:
+                    self.wfile.write(b": keepalive\n\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionError, OSError):
+            pass
+        finally:
+            with _event_lock:
+                _event_clients.discard(client)
+
     # ── Routing ───────────────────────────────────────────────────────────────
 
     def route_get(self, path: str, qs: dict) -> None:
+        if path == "/api/events":
+            auth = verify_token(qs.get("token", [""])[0])
+            if not auth:
+                json_response(self, 401, {"error": "unauthorized"})
+                return
+            self.stream_events(auth)
+            return
+
         # Setup check (public)
         if path == "/api/setup-required":
             with db() as conn:
