@@ -586,8 +586,13 @@ input[type="number"] { -moz-appearance: textfield; }
 input[type="number"]::-webkit-outer-spin-button,
 input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
 input:disabled, select:disabled, textarea:disabled { opacity: .5; cursor: not-allowed; background: var(--bg3); }
-input[type="time"] { direction: ltr; text-align: left; }
-.time24-input { direction: ltr; text-align: left; font-variant-numeric: tabular-nums; }
+.time-select,
+.reminder-time,
+#managerDigestTime {
+  direction: ltr;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
 
 .check-list {
   display: grid;

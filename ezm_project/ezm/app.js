@@ -57,6 +57,10 @@ function todayWeekStart() {
   return fmtDate(d);
 }
 
+function planningWeekStart() {
+  return addDays(todayWeekStart(), 7);
+}
+
 function fmtDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
@@ -1607,6 +1611,7 @@ function openScheduleShiftModal(shift) {
         </section>` : ""}
       </div>`,
     footer: `<button class="btn btn-primary" id="modalMarkStaffedBtn" type="button">${shift.staffed ? "בטל מאויש" : "סמן מאויש"}</button>
+             <button class="btn btn-ghost" id="modalShiftHoursBtn" type="button">שעות</button>
              <button class="btn btn-ghost" id="modalShortageBtn" type="button">${shift.shortage ? "סגור חוסר" : "דווח חוסר"}</button>
              <button class="btn btn-ghost" id="modalReinforcementBtn" type="button">כ״א</button>
              ${canSetShiftMaxEmployees() ? `<button class="btn btn-ghost" id="modalMaxEmployeesBtn" type="button">${shiftMaxEmployees(shift) ? `תקן ${shiftMaxEmployees(shift)}` : "הגדר תקן"}</button>` : ""}
@@ -1628,6 +1633,9 @@ function openScheduleShiftModal(shift) {
       openShortageModal(shift);
     }
   });
+  const modalShiftHoursBtn = document.getElementById("modalShiftHoursBtn");
+  modalShiftHoursBtn.disabled = locked;
+  modalShiftHoursBtn.addEventListener("click", () => openDefaultShiftHoursModal(shift));
   const modalReinforcementBtn = document.getElementById("modalReinforcementBtn");
   modalReinforcementBtn.disabled = locked;
   modalReinforcementBtn.addEventListener("click", () => openReinforcementModal(shift));
@@ -2003,8 +2011,8 @@ function openEditHoursModal(assignment, user, shift) {
     title:  `עדכון שעות · ${user.fullName}`,
     body: `
       <div class="form-grid">
-        <div class="field"><label>שעת התחלה</label><input class="time24-input" type="text" id="assignStart" value="${start}" placeholder="08:00" inputmode="numeric" /></div>
-        <div class="field"><label>שעת סיום</label><input class="time24-input" type="text" id="assignEnd" value="${end}" placeholder="17:00" inputmode="numeric" /></div>
+        <div class="field"><label>שעת התחלה</label>${timeSelectHTML("assignStart", start)}</div>
+        <div class="field"><label>שעת סיום</label>${timeSelectHTML("assignEnd", end)}</div>
       </div>`,
     footer: `<button class="btn btn-primary" id="saveAssignHours">שמור</button>
              <button class="btn btn-ghost" id="cancelModalBtn">ביטול</button>`
@@ -2024,6 +2032,34 @@ function isValidTime24(value) {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value || "").trim());
 }
 
+function timeSelectOptions(value = "", stepMinutes = 15, includeEmpty = false) {
+  const selected = String(value || "");
+  const options = [];
+  const seen = new Set();
+  if (includeEmpty) {
+    options.push(`<option value="" ${!selected ? "selected" : ""}>בחר שעה</option>`);
+  }
+  if (selected && isValidTime24(selected)) {
+    const [selH, selM] = selected.split(":").map(Number);
+    if (((selH * 60) + selM) % stepMinutes !== 0) {
+      seen.add(selected);
+      options.push(`<option value="${selected}" selected>${selected}</option>`);
+    }
+  }
+  for (let mins = 0; mins < 24 * 60; mins += stepMinutes) {
+    const hh = String(Math.floor(mins / 60)).padStart(2, "0");
+    const mm = String(mins % 60).padStart(2, "0");
+    const time = `${hh}:${mm}`;
+    if (seen.has(time)) continue;
+    options.push(`<option value="${time}" ${selected === time ? "selected" : ""}>${time}</option>`);
+  }
+  return options.join("");
+}
+
+function timeSelectHTML(id, value = "", className = "", includeEmpty = false) {
+  return `<select class="time-select ${className}" id="${id}">${timeSelectOptions(value, 15, includeEmpty)}</select>`;
+}
+
 function openDefaultShiftHoursModal(shift) {
   const [start, end] = shift.hours.split("-");
   const label = slotLabel(shift.slot);
@@ -2033,8 +2069,8 @@ function openDefaultShiftHoursModal(shift) {
     body: `
       <div class="notice notice-info">השינוי יעדכן את המשמרת הזו ואת כל השבועות הפתוחים מאותו שבוע והלאה.</div>
       <div class="form-grid mt-3">
-        <div class="field"><label>שעת התחלה</label><input class="time24-input" type="text" id="defaultShiftStart" value="${start}" placeholder="08:00" inputmode="numeric" /></div>
-        <div class="field"><label>שעת סיום</label><input class="time24-input" type="text" id="defaultShiftEnd" value="${end}" placeholder="17:00" inputmode="numeric" /></div>
+        <div class="field"><label>שעת התחלה</label>${timeSelectHTML("defaultShiftStart", start)}</div>
+        <div class="field"><label>שעת סיום</label>${timeSelectHTML("defaultShiftEnd", end)}</div>
       </div>`,
     footer: `<button class="btn btn-primary" id="saveDefaultShiftHours">שמור כברירת מחדל</button>
              <button class="btn btn-ghost" id="cancelModalBtn">ביטול</button>`
@@ -2068,8 +2104,8 @@ function openMiddleShiftModal(dayKey) {
     title: `פתיחת משמרת אמצע · ${DAY_LABELS[dayKey]}`,
     body: `
       <div class="form-grid">
-        <div class="field"><label>שעת התחלה</label><input class="time24-input" type="text" id="middleShiftStart" value="12:00" placeholder="12:00" inputmode="numeric" /></div>
-        <div class="field"><label>שעת סיום</label><input class="time24-input" type="text" id="middleShiftEnd" value="18:00" placeholder="18:00" inputmode="numeric" /></div>
+        <div class="field"><label>שעת התחלה</label>${timeSelectHTML("middleShiftStart", "12:00")}</div>
+        <div class="field"><label>שעת סיום</label>${timeSelectHTML("middleShiftEnd", "18:00")}</div>
       </div>`,
     footer: `<button class="btn btn-primary" id="createMiddleShiftBtn">פתח משמרת</button>
              <button class="btn btn-ghost" id="cancelModalBtn">ביטול</button>`
@@ -2714,7 +2750,7 @@ function reminderSlotHTML(slot = { day: 1, time: "18:00" }) {
   return `
     <div class="notification-slot-row">
       <select class="reminder-day">${options}</select>
-      <input type="time" class="reminder-time" value="${slot.time || "18:00"}" />
+      <select class="reminder-time">${timeSelectOptions(slot.time || "18:00")}</select>
       <button class="btn btn-ghost btn-xs" type="button" data-remove-reminder>הסר</button>
     </div>`;
 }
@@ -2724,6 +2760,7 @@ function renderNotificationSettings(settings) {
   document.getElementById("availabilityReminderSlots").innerHTML =
     (settings.availabilityReminderSlots || []).map(reminderSlotHTML).join("") || reminderSlotHTML();
   document.getElementById("managerDigestEnabled").checked = !!settings.managerDigestEnabled;
+  document.getElementById("managerDigestTime").innerHTML = timeSelectOptions(settings.managerDigestTime || "09:00");
   document.getElementById("managerDigestTime").value = settings.managerDigestTime || "09:00";
 }
 
@@ -3354,7 +3391,7 @@ async function renderPortal() {
   const greeting = document.getElementById("portalHeroGreeting");
   if (greeting) greeting.textContent = `היי ${firstName},`;
 
-  if (!app.portalWeekStart) app.portalWeekStart = todayWeekStart();
+  if (!app.portalWeekStart) app.portalWeekStart = planningWeekStart();
   const ws = app.portalWeekStart;
 
   // Default selected day to today (if in this week) or Sunday
@@ -4263,8 +4300,8 @@ async function renderPortalRequests() {
             <div class="request-edit-form hidden" id="edit-form-${r.id}">
               ${r.type === "hours" ? `
                 <div class="edit-form-times">
-                  <label>משעה <input type="time" id="edit-start-${r.id}" value="${r.requestedStart || ""}"></label>
-                  <label>עד שעה <input type="time" id="edit-end-${r.id}" value="${r.requestedEnd || ""}"></label>
+                  <label>משעה ${timeSelectHTML(`edit-start-${r.id}`, r.requestedStart || "", "", true)}</label>
+                  <label>עד שעה ${timeSelectHTML(`edit-end-${r.id}`, r.requestedEnd || "", "", true)}</label>
                 </div>` : ""}
               <textarea id="edit-note-${r.id}" placeholder="הערה...">${r.note || ""}</textarea>
               <div class="edit-form-btns">
@@ -4558,8 +4595,8 @@ async function openEmployeeRequestModal(type, preferredShiftId = null, preferred
   let extraFields = "";
   if (type === "hours") {
     extraFields = `
-      <div class="field"><label>שעת כניסה</label><input type="time" id="reqStart" /></div>
-      <div class="field"><label>שעת יציאה</label><input type="time" id="reqEnd" /></div>`;
+      <div class="field"><label>שעת כניסה</label>${timeSelectHTML("reqStart", "", "", true)}</div>
+      <div class="field"><label>שעת יציאה</label>${timeSelectHTML("reqEnd", "", "", true)}</div>`;
   }
   if (type === "swap") {
     extraFields = `
@@ -4608,6 +4645,7 @@ async function openEmployeeRequestModal(type, preferredShiftId = null, preferred
     if (type === "hours") {
       body.requestedStart = document.getElementById("reqStart").value;
       body.requestedEnd   = document.getElementById("reqEnd").value;
+      if (!body.requestedStart || !body.requestedEnd) return alert("צריך לבחור שעת כניסה ושעת יציאה");
     }
     if (type === "swap") {
       if (!document.getElementById("reqReplacement").value) return alert("אין מחליף זמין לבחירה במשמרת הזאת");
@@ -4871,12 +4909,12 @@ async function bootstrap() {
 
   // Portal week navigation
   document.getElementById("portalPrevWeek").addEventListener("click", () => {
-    app.portalWeekStart = addDays(app.portalWeekStart || todayWeekStart(), -7);
+    app.portalWeekStart = addDays(app.portalWeekStart || planningWeekStart(), -7);
     window._portalSelectedDay = portalTodayDayIndex(app.portalWeekStart);
     renderPortal();
   });
   document.getElementById("portalNextWeek").addEventListener("click", () => {
-    app.portalWeekStart = addDays(app.portalWeekStart || todayWeekStart(), 7);
+    app.portalWeekStart = addDays(app.portalWeekStart || planningWeekStart(), 7);
     window._portalSelectedDay = portalTodayDayIndex(app.portalWeekStart);
     renderPortal();
   });

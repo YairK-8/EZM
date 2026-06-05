@@ -1079,6 +1079,10 @@ def current_week_start() -> str:
     return time.strftime("%Y-%m-%d", time.localtime(time.time() - days_since_sunday * 86400))
 
 
+def planning_week_start() -> str:
+    return time.strftime("%Y-%m-%d", time.localtime(time.mktime(time.strptime(current_week_start(), "%Y-%m-%d")) + 7 * 86400))
+
+
 def mark_notification_once(conn: sqlite3.Connection, kind: str, recipient: str, entity_key: str) -> bool:
     try:
         conn.execute(
@@ -1170,7 +1174,7 @@ def audit(conn: sqlite3.Connection, user_id: int | None, action: str, entity_typ
 # ── Handler ───────────────────────────────────────────────────────────────────
 
 def send_availability_reminders(week_start: str | None = None, reminder_key: str | None = None) -> int:
-    week_start = week_start or current_week_start()
+    week_start = week_start or planning_week_start()
     reminder_key = reminder_key or "manual"
     sent = 0
     with db() as conn:
