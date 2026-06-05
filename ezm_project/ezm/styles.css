@@ -2412,6 +2412,13 @@ input:disabled, select:disabled, textarea:disabled { opacity: .5; cursor: not-al
 .request-info { flex: 1; min-width: 0; }
 .request-info strong { font-size: .875rem; display: block; color: var(--text); }
 .request-info small  { font-size: .78rem; color: var(--text2); }
+.request-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
 .request-actions { display: flex; gap: 6px; }
 .bulk-request-bar {
   display: flex;
@@ -2930,6 +2937,14 @@ body.employee-mode .portal-shift-actions .btn {
   .page-header-actions .btn { width: 100%; }
   .request-row,
   .data-row { align-items: stretch; flex-direction: column; }
+  .request-side {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .request-side .tag {
+    align-self: flex-start;
+  }
   .request-actions,
   .data-row-actions { width: 100%; }
   .request-actions .btn,

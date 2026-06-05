@@ -1960,8 +1960,10 @@ function openTaxiResponseRequiredModal(shiftId, userId, data, assignOptions = {}
           <strong>${label}</strong>
           <small>${r.note || "בקשת מונית שבת ממתינה למענה"}</small>
         </div>
-        <button class="btn btn-success btn-xs" data-taxi-answer="${r.id}" data-status="approved">אשר</button>
-        <button class="btn btn-danger btn-xs" data-taxi-answer="${r.id}" data-status="rejected">דחה</button>
+        <div class="data-row-actions">
+          <button class="btn btn-success btn-xs" data-taxi-answer="${r.id}" data-status="approved">אשר</button>
+          <button class="btn btn-danger btn-xs" data-taxi-answer="${r.id}" data-status="rejected">דחה</button>
+        </div>
       </div>`;
   }).join("");
   modal({
@@ -1974,15 +1976,12 @@ function openTaxiResponseRequiredModal(shiftId, userId, data, assignOptions = {}
   document.querySelectorAll("[data-taxi-answer]").forEach(btn => {
     btn.addEventListener("click", async () => {
       try {
-        btn.disabled = true;
+        document.querySelectorAll("[data-taxi-answer]").forEach(b => { b.disabled = true; });
         await api("PUT", `/api/requests/${btn.dataset.taxiAnswer}`, { status: btn.dataset.status });
-        btn.closest(".data-row")?.remove();
-        if (!document.querySelector("[data-taxi-answer]")) {
-          closeModal();
-          await assignEmployee(shiftId, userId, assignOptions);
-        }
+        closeModal();
+        await assignEmployee(shiftId, userId, assignOptions);
       } catch (err) {
-        btn.disabled = false;
+        document.querySelectorAll("[data-taxi-answer]").forEach(b => { b.disabled = false; });
         alert("שגיאה בעדכון בקשת מונית");
       }
     });
@@ -1991,6 +1990,7 @@ function openTaxiResponseRequiredModal(shiftId, userId, data, assignOptions = {}
     closeModal();
     await assignEmployee(shiftId, userId, assignOptions);
   });
+  document.getElementById("cancelModalBtn")?.addEventListener("click", closeModal);
 }
 
 async function removeAssignment(assignmentId) {
@@ -2879,31 +2879,35 @@ function renderRequestList(containerId, requests) {
     const hoursLabel = r.type !== "taxi" && r.requestedStart ? ` · מבקש ${r.requestedStart}-${r.requestedEnd}` : "";
     const taxiCanReject = r.type === "taxi" && canRejectHandledTaxiRequest(r);
     const taxiLocked = r.type === "taxi" && r.status === "approved" && !taxiCanReject;
+    const actionHtml = `
+      ${r.status === "open" && r.type !== "reinforcement" ? `
+        <div class="request-actions">
+          <button class="btn btn-success btn-xs" onclick="resolveRequest(${r.id},'approved')">אשר</button>
+          <button class="btn btn-danger btn-xs" onclick="resolveRequest(${r.id},'rejected')">דחה</button>
+        </div>` : ""}
+      ${r.type === "taxi" && r.status === "approved" && taxiCanReject ? `
+        <div class="request-actions">
+          <button class="btn btn-danger btn-xs" onclick="resolveRequest(${r.id},'rejected')">שנה לדחוי</button>
+        </div>` : ""}
+      ${r.type === "taxi" && r.status === "rejected" ? `
+        <div class="request-actions">
+          <button class="btn btn-success btn-xs" onclick="resolveRequest(${r.id},'approved')">שנה למאושר</button>
+        </div>` : ""}
+      ${taxiLocked ? `<small class="request-lock-note">נעול לשינוי: פחות מיומיים למשמרת</small>` : ""}
+      ${r.status === "open" && r.type === "reinforcement" ? `
+        <div class="request-actions">
+          <button class="btn btn-danger btn-xs" onclick="resolveRequest(${r.id},'rejected')">בטל בקשה</button>
+        </div>` : ""}`;
     return `
       <div class="request-row">
         <div class="request-info">
           <strong>${requesterName} · ${requestTypeLabel(r, typeLabel)}</strong>
           <small>${[branchLabel, shiftLabel].filter(Boolean).join(" · ")}${hoursLabel}${replacementLabel}${r.note ? " · " + r.note : ""}</small>
         </div>
-        <span class="tag ${statusClass}">${statusLabel}</span>
-        ${r.status === "open" && r.type !== "reinforcement" ? `
-          <div class="request-actions">
-            <button class="btn btn-success btn-xs" onclick="resolveRequest(${r.id},'approved')">אשר</button>
-            <button class="btn btn-danger btn-xs" onclick="resolveRequest(${r.id},'rejected')">דחה</button>
-          </div>` : ""}
-        ${r.type === "taxi" && r.status === "approved" && taxiCanReject ? `
-          <div class="request-actions">
-            <button class="btn btn-danger btn-xs" onclick="resolveRequest(${r.id},'rejected')">שנה לדחוי</button>
-          </div>` : ""}
-        ${r.type === "taxi" && r.status === "rejected" ? `
-          <div class="request-actions">
-            <button class="btn btn-success btn-xs" onclick="resolveRequest(${r.id},'approved')">שנה למאושר</button>
-          </div>` : ""}
-        ${taxiLocked ? `<small class="request-lock-note">נעול לשינוי: פחות מיומיים למשמרת</small>` : ""}
-        ${r.status === "open" && r.type === "reinforcement" ? `
-          <div class="request-actions">
-            <button class="btn btn-danger btn-xs" onclick="resolveRequest(${r.id},'rejected')">בטל בקשה</button>
-          </div>` : ""}
+        <div class="request-side">
+          <span class="tag ${statusClass}">${statusLabel}</span>
+          ${actionHtml}
+        </div>
       </div>`;
   }).join("");
 }
