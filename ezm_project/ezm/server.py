@@ -1362,6 +1362,7 @@ class EZMHandler(SimpleHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path.startswith("/api/"):
+            self._response_status = None
             _req_count[0] += 1; self._req_start = time.time()
             self.route_post(parsed.path)
             self.broadcast_after_mutation(parsed.path)
@@ -1371,6 +1372,7 @@ class EZMHandler(SimpleHTTPRequestHandler):
     def do_PUT(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path.startswith("/api/"):
+            self._response_status = None
             _req_count[0] += 1; self._req_start = time.time()
             self.route_put(parsed.path)
             self.broadcast_after_mutation(parsed.path)
@@ -1380,6 +1382,7 @@ class EZMHandler(SimpleHTTPRequestHandler):
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path.startswith("/api/"):
+            self._response_status = None
             _req_count[0] += 1; self._req_start = time.time()
             self.route_delete(parsed.path)
             self.broadcast_after_mutation(parsed.path)

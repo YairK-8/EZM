@@ -49,7 +49,7 @@ const app = {
   suppressReinforcementPrompt: false,
   realtimeSource: null,
   realtimeTimer: null,
-  lastLocalWriteAt: 0,
+  realtimePending: false,
 };
 
 // ── Date helpers ───────────────────────────────────────────────────────────────
@@ -428,9 +428,7 @@ async function api(method, path, body) {
     err.data = data;
     throw err;
   }
-  if (isMutation && !path.startsWith("/api/auth") && !path.startsWith("/api/dev")) {
-    app.lastLocalWriteAt = Date.now();
-  }
+  if (isMutation && !path.startsWith("/api/auth") && !path.startsWith("/api/dev")) scheduleRealtimeRefresh(120);
   return data;
 }
 
@@ -439,7 +437,6 @@ function startRealtime() {
   if (!app.token || typeof EventSource === "undefined") return;
   const source = new EventSource(`/api/events?token=${encodeURIComponent(app.token)}`);
   source.addEventListener("change", () => {
-    if (Date.now() - app.lastLocalWriteAt < 900) return;
     scheduleRealtimeRefresh();
   });
   source.onerror = () => {
@@ -472,9 +469,10 @@ function scheduleRealtimeRefresh(delay = 500) {
     app.realtimeTimer = null;
     const modalOpen = !document.getElementById("modalBackdrop")?.hidden;
     if (modalOpen) {
-      scheduleRealtimeRefresh(900);
+      app.realtimePending = true;
       return;
     }
+    app.realtimePending = false;
     await refreshActiveViewFromRealtime();
   }, delay);
 }
@@ -491,9 +489,11 @@ async function refreshActiveViewFromRealtime() {
         await renderEmployees();
         break;
       case "requests":
+        await refreshCoreData();
         await loadRequests();
         break;
       case "reports":
+        await refreshCoreData();
         await loadReports();
         break;
       case "area":
@@ -503,9 +503,11 @@ async function refreshActiveViewFromRealtime() {
         await loadNetworkView();
         break;
       case "employeePortal":
+        await refreshCoreData();
         await renderPortal();
         break;
       case "employeeRequests":
+        await refreshCoreData();
         await renderPortalRequests();
         break;
     }
@@ -563,6 +565,12 @@ function defaultView(role) {
                 "branch-manager":"schedule", "employee":"employeePortal",
                 "developer":"developer" };
   return map[role] || "auth";
+}
+
+function initialViewForUser() {
+  const hashView = (window.location.hash || "").replace(/^#/, "");
+  const allowed = allowedViews(app.user?.role);
+  return allowed.includes(hashView) ? hashView : defaultView(app.user?.role);
 }
 
 // ── Navigation ─────────────────────────────────────────────────────────────────
@@ -748,6 +756,10 @@ function modal({ kicker, title, body, footer = "" }) {
 }
 function closeModal() {
   document.getElementById("modalBackdrop").hidden = true;
+  if (app.realtimePending) {
+    app.realtimePending = false;
+    scheduleRealtimeRefresh(80);
+  }
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -827,7 +839,7 @@ async function enterApp() {
   await loadInitialData();
   applyRoleAccess();
   startRealtime();
-  showView(defaultView(app.user.role));
+  showView(initialViewForUser());
 }
 
 async function logout() {
@@ -859,7 +871,7 @@ async function devLogin() {
     storeToken(app.token, false);
     applyRoleAccess();
     startRealtime();
-    showView("developer");
+    showView(initialViewForUser());
   } catch {
     setDevNote("סיסמה שגויה.", "error");
   } finally {
@@ -5079,7 +5091,7 @@ async function bootstrap() {
       await loadInitialData();
       applyRoleAccess();
       startRealtime();
-      showView(defaultView(app.user.role));
+      showView(initialViewForUser());
     } catch (e) {
       stopRealtime();
       app.token = "";
