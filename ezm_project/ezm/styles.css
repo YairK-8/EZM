@@ -5916,6 +5916,12 @@ body.employee-mode #reportsView .btn {
   flex-wrap: wrap;
   justify-content: flex-start;
 }
+#requestsView .request-lock-note {
+  color: var(--mgr-muted);
+  font-size: .72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
 #requestsView .request-actions .btn,
 #requestsView .bulk-request-bar .btn {
   border-radius: 999px;

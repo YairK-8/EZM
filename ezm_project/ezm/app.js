@@ -2862,7 +2862,7 @@ function renderRequestList(containerId, requests) {
   const el = document.getElementById(containerId);
   if (!el) return;
   if (!requests.length) {
-    el.innerHTML = `<div class="empty-state" style="padding:14px">אין בקשות פתוחות.</div>`;
+    el.innerHTML = `<div class="empty-state" style="padding:14px">${containerId === "taxiRequests" ? "אין בקשות מונית להצגה." : "אין בקשות פתוחות."}</div>`;
     return;
   }
   el.innerHTML = requests.map(r => {
@@ -2876,7 +2876,9 @@ function renderRequestList(containerId, requests) {
       : "";
     const branchLabel = r.branch?.name ? `${r.branch.name}${r.branch.number ? " · " + r.branch.number : ""}` : "";
     const replacementLabel = r.replacementName ? ` · מחליף: ${r.replacementName}` : "";
-    const hoursLabel = r.requestedStart ? ` · מבקש ${r.requestedStart}-${r.requestedEnd}` : "";
+    const hoursLabel = r.type !== "taxi" && r.requestedStart ? ` · מבקש ${r.requestedStart}-${r.requestedEnd}` : "";
+    const taxiCanChange = r.type === "taxi" && canChangeHandledTaxiRequest(r);
+    const taxiLocked = r.type === "taxi" && r.status !== "open" && !taxiCanChange;
     return `
       <div class="request-row">
         <div class="request-info">
@@ -2889,12 +2891,35 @@ function renderRequestList(containerId, requests) {
             <button class="btn btn-success btn-xs" onclick="resolveRequest(${r.id},'approved')">אשר</button>
             <button class="btn btn-danger btn-xs" onclick="resolveRequest(${r.id},'rejected')">דחה</button>
           </div>` : ""}
+        ${r.type === "taxi" && r.status === "approved" && taxiCanChange ? `
+          <div class="request-actions">
+            <button class="btn btn-danger btn-xs" onclick="resolveRequest(${r.id},'rejected')">שנה לדחוי</button>
+          </div>` : ""}
+        ${r.type === "taxi" && r.status === "rejected" && taxiCanChange ? `
+          <div class="request-actions">
+            <button class="btn btn-success btn-xs" onclick="resolveRequest(${r.id},'approved')">שנה למאושר</button>
+          </div>` : ""}
+        ${taxiLocked ? `<small class="request-lock-note">נעול לשינוי: פחות מיומיים למשמרת</small>` : ""}
         ${r.status === "open" && r.type === "reinforcement" ? `
           <div class="request-actions">
             <button class="btn btn-danger btn-xs" onclick="resolveRequest(${r.id},'rejected')">בטל בקשה</button>
           </div>` : ""}
       </div>`;
   }).join("");
+}
+
+function requestShiftDate(r) {
+  if (!r.shift?.weekStart || !r.shift?.dayKey) return null;
+  const idx = DAY_KEYS.indexOf(r.shift.dayKey);
+  return idx >= 0 ? addDays(r.shift.weekStart, idx) : null;
+}
+
+function canChangeHandledTaxiRequest(r) {
+  if (r.status === "open") return true;
+  const shiftDate = requestShiftDate(r);
+  if (!shiftDate) return false;
+  const today = fmtDate(new Date());
+  return Math.round((parseIso(shiftDate) - parseIso(today)) / 86400000) >= 2;
 }
 
 function requestTypeLabel(r, fallback) {
@@ -2911,7 +2936,11 @@ window.resolveRequest = async function(id, status) {
     // Refresh shift view if visible
     if (app.currentWeek) await loadWeekView();
   } catch (e) {
-    alert("שגיאה בעדכון בקשה");
+    if (e.data?.error === "taxi_change_deadline_passed") {
+      alert("לא ניתן לשנות החלטת מונית פחות מיומיים לפני המשמרת.");
+    } else {
+      alert("שגיאה בעדכון בקשה");
+    }
   }
 };
 

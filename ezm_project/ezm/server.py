@@ -14,7 +14,7 @@ import threading
 import time
 
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.message import EmailMessage
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -1083,6 +1083,22 @@ def planning_week_start() -> str:
     return time.strftime("%Y-%m-%d", time.localtime(time.mktime(time.strptime(current_week_start(), "%Y-%m-%d")) + 7 * 86400))
 
 
+def shift_date_from_week(week_start: str, day_key: str) -> datetime.date | None:
+    try:
+        day_index = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"].index(day_key)
+        return (datetime.strptime(week_start, "%Y-%m-%d") + timedelta(days=day_index)).date()
+    except Exception:
+        return None
+
+
+def can_change_handled_taxi_request(week_start: str, day_key: str) -> bool:
+    shift_date = shift_date_from_week(week_start, day_key)
+    if not shift_date:
+        return False
+    today = datetime.now(APP_TZ).date()
+    return (shift_date - today).days >= 2
+
+
 def mark_notification_once(conn: sqlite3.Connection, kind: str, recipient: str, entity_key: str) -> bool:
     try:
         conn.execute(
@@ -1617,10 +1633,10 @@ class EZMHandler(SimpleHTTPRequestHandler):
                 else:
                     allowed = accessible_branch_ids(conn, auth)
                     if allowed is None:
-                        rows = conn.execute(base_request_sql + " WHERE cr.status='open' ORDER BY cr.created_at DESC").fetchall()
+                        rows = conn.execute(base_request_sql + " WHERE cr.status='open' OR cr.type='taxi' ORDER BY cr.created_at DESC").fetchall()
                     elif allowed:
                         placeholders = ",".join("?" for _ in allowed)
-                        rows = conn.execute(base_request_sql + f" WHERE cr.status='open' AND w.branch_id IN ({placeholders}) ORDER BY cr.created_at DESC", allowed).fetchall()
+                        rows = conn.execute(base_request_sql + f" WHERE (cr.status='open' OR cr.type='taxi') AND w.branch_id IN ({placeholders}) ORDER BY cr.created_at DESC", allowed).fetchall()
                     else:
                         rows = []
             json_response(self, 200, {"requests": [ser_request(r) for r in rows]})
@@ -2553,7 +2569,7 @@ class EZMHandler(SimpleHTTPRequestHandler):
                     json_response(self, 404, {"error": "not_found"}); return
                 old_status = req["status"]
                 branch = conn.execute("""
-                    SELECT w.branch_id, w.status AS week_status
+                    SELECT w.branch_id, w.status AS week_status, w.week_start, s.day_key
                     FROM shifts s JOIN weeks w ON w.id=s.week_id
                     WHERE s.id=?
                 """, (req["shift_id"],)).fetchone()
@@ -2563,6 +2579,13 @@ class EZMHandler(SimpleHTTPRequestHandler):
                     json_response(self, 403, {"error": "forbidden"}); return
                 if req["type"] == "reinforcement" and new_status == "approved" and not employee_reinforcement:
                     json_response(self, 403, {"error": "employee_approval_required"}); return
+                if (
+                    req["type"] == "taxi"
+                    and old_status in ("approved", "rejected")
+                    and old_status != new_status
+                    and not can_change_handled_taxi_request(branch["week_start"], branch["day_key"])
+                ):
+                    json_response(self, 409, {"error": "taxi_change_deadline_passed"}); return
                 if req["type"] == "reinforcement" and employee_reinforcement and new_status == "rejected":
                     if req["status"] == "approved" and branch["week_status"] != "draft":
                         json_response(self, 409, {"error": "week_locked"}); return
