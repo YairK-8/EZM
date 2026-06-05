@@ -2877,8 +2877,8 @@ function renderRequestList(containerId, requests) {
     const branchLabel = r.branch?.name ? `${r.branch.name}${r.branch.number ? " · " + r.branch.number : ""}` : "";
     const replacementLabel = r.replacementName ? ` · מחליף: ${r.replacementName}` : "";
     const hoursLabel = r.type !== "taxi" && r.requestedStart ? ` · מבקש ${r.requestedStart}-${r.requestedEnd}` : "";
-    const taxiCanChange = r.type === "taxi" && canChangeHandledTaxiRequest(r);
-    const taxiLocked = r.type === "taxi" && r.status !== "open" && !taxiCanChange;
+    const taxiCanReject = r.type === "taxi" && canRejectHandledTaxiRequest(r);
+    const taxiLocked = r.type === "taxi" && r.status === "approved" && !taxiCanReject;
     return `
       <div class="request-row">
         <div class="request-info">
@@ -2891,11 +2891,11 @@ function renderRequestList(containerId, requests) {
             <button class="btn btn-success btn-xs" onclick="resolveRequest(${r.id},'approved')">אשר</button>
             <button class="btn btn-danger btn-xs" onclick="resolveRequest(${r.id},'rejected')">דחה</button>
           </div>` : ""}
-        ${r.type === "taxi" && r.status === "approved" && taxiCanChange ? `
+        ${r.type === "taxi" && r.status === "approved" && taxiCanReject ? `
           <div class="request-actions">
             <button class="btn btn-danger btn-xs" onclick="resolveRequest(${r.id},'rejected')">שנה לדחוי</button>
           </div>` : ""}
-        ${r.type === "taxi" && r.status === "rejected" && taxiCanChange ? `
+        ${r.type === "taxi" && r.status === "rejected" ? `
           <div class="request-actions">
             <button class="btn btn-success btn-xs" onclick="resolveRequest(${r.id},'approved')">שנה למאושר</button>
           </div>` : ""}
@@ -2914,7 +2914,7 @@ function requestShiftDate(r) {
   return idx >= 0 ? addDays(r.shift.weekStart, idx) : null;
 }
 
-function canChangeHandledTaxiRequest(r) {
+function canRejectHandledTaxiRequest(r) {
   if (r.status === "open") return true;
   const shiftDate = requestShiftDate(r);
   if (!shiftDate) return false;

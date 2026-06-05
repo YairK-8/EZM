@@ -1099,6 +1099,37 @@ def can_change_handled_taxi_request(week_start: str, day_key: str) -> bool:
     return (shift_date - today).days >= 2
 
 
+def shift_has_passed(week_start: str, day_key: str, hours: str) -> bool:
+    shift_date = shift_date_from_week(week_start, day_key)
+    if not shift_date:
+        return False
+    now_dt = datetime.now(APP_TZ)
+    try:
+        end_part = (hours or "").split("-", 1)[1].strip()
+        end_hour, end_minute = [int(part) for part in end_part.split(":", 1)]
+        end_dt = datetime.combine(shift_date, datetime.min.time(), APP_TZ).replace(hour=end_hour, minute=end_minute)
+        return end_dt < now_dt
+    except Exception:
+        return shift_date < now_dt.date()
+
+
+def delete_expired_open_requests(conn: sqlite3.Connection) -> None:
+    rows = conn.execute("""
+        SELECT cr.id, w.week_start, s.day_key, s.hours
+        FROM change_requests cr
+        JOIN shifts s ON s.id=cr.shift_id
+        JOIN weeks w ON w.id=s.week_id
+        WHERE cr.status='open'
+    """).fetchall()
+    expired_ids = [
+        row["id"]
+        for row in rows
+        if shift_has_passed(row["week_start"], row["day_key"], row["hours"])
+    ]
+    if expired_ids:
+        conn.executemany("DELETE FROM change_requests WHERE id=?", [(rid,) for rid in expired_ids])
+
+
 def mark_notification_once(conn: sqlite3.Connection, kind: str, recipient: str, entity_key: str) -> bool:
     try:
         conn.execute(
@@ -1628,15 +1659,21 @@ class EZMHandler(SimpleHTTPRequestHandler):
                 LEFT JOIN users repl ON repl.id=cr.replacement_id
             """
             with db() as conn:
+                delete_expired_open_requests(conn)
                 if auth["role"] == "employee":
                     rows = conn.execute(base_request_sql + " WHERE cr.requester_id=? ORDER BY cr.created_at DESC", (auth["uid"],)).fetchall()
                 else:
+                    taxi_week_filter = (current_week_start(), planning_week_start())
+                    manager_request_filter = "((cr.type<>'taxi' AND cr.status='open') OR (cr.type='taxi' AND w.week_start IN (?, ?)))"
                     allowed = accessible_branch_ids(conn, auth)
                     if allowed is None:
-                        rows = conn.execute(base_request_sql + " WHERE cr.status='open' OR cr.type='taxi' ORDER BY cr.created_at DESC").fetchall()
+                        rows = conn.execute(base_request_sql + f" WHERE {manager_request_filter} ORDER BY cr.created_at DESC", taxi_week_filter).fetchall()
                     elif allowed:
                         placeholders = ",".join("?" for _ in allowed)
-                        rows = conn.execute(base_request_sql + f" WHERE (cr.status='open' OR cr.type='taxi') AND w.branch_id IN ({placeholders}) ORDER BY cr.created_at DESC", allowed).fetchall()
+                        rows = conn.execute(
+                            base_request_sql + f" WHERE {manager_request_filter} AND w.branch_id IN ({placeholders}) ORDER BY cr.created_at DESC",
+                            (*taxi_week_filter, *allowed),
+                        ).fetchall()
                     else:
                         rows = []
             json_response(self, 200, {"requests": [ser_request(r) for r in rows]})
@@ -2581,8 +2618,8 @@ class EZMHandler(SimpleHTTPRequestHandler):
                     json_response(self, 403, {"error": "employee_approval_required"}); return
                 if (
                     req["type"] == "taxi"
-                    and old_status in ("approved", "rejected")
-                    and old_status != new_status
+                    and old_status == "approved"
+                    and new_status == "rejected"
                     and not can_change_handled_taxi_request(branch["week_start"], branch["day_key"])
                 ):
                     json_response(self, 409, {"error": "taxi_change_deadline_passed"}); return
