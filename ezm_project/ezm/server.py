@@ -2354,38 +2354,40 @@ class EZMHandler(SimpleHTTPRequestHandler):
                 user = conn.execute("SELECT * FROM users WHERE id=?", (auth["uid"],)).fetchone()
                 if not user or not user["hourly_wage"]:
                     json_response(self, 409, {"error": "hourly_wage_required"}); return
-                shift = conn.execute("""
-                    SELECT s.*, w.week_start, w.status AS week_status, w.branch_id
-                    FROM shifts s JOIN weeks w ON w.id=s.week_id
-                    WHERE s.id=?
-                """, (shift_id,)).fetchone()
-                if not shift or shift["week_status"] not in ("published", "closed") or not can_access_branch(conn, auth, shift["branch_id"]):
-                    json_response(self, 403, {"error": "forbidden"}); return
-                assigned = conn.execute(
-                    "SELECT 1 FROM shift_assignments WHERE shift_id=? AND user_id=?",
-                    (shift_id, auth["uid"])
-                ).fetchone()
-                if not assigned:
-                    json_response(self, 403, {"error": "not_assigned"}); return
                 open_entry = conn.execute(
                     "SELECT id FROM time_clock_entries WHERE user_id=? AND clock_out IS NULL",
                     (auth["uid"],)
                 ).fetchone()
                 if open_entry:
                     json_response(self, 409, {"error": "active_clock_exists"}); return
-                existing = conn.execute(
-                    "SELECT id FROM time_clock_entries WHERE user_id=? AND shift_id=?",
-                    (auth["uid"], shift_id)
-                ).fetchone()
-                if existing:
-                    json_response(self, 409, {"error": "entry_exists"}); return
+                branch_id = None
+                if shift_id:
+                    shift = conn.execute("""
+                        SELECT s.*, w.week_start, w.status AS week_status, w.branch_id
+                        FROM shifts s JOIN weeks w ON w.id=s.week_id
+                        WHERE s.id=?
+                    """, (shift_id,)).fetchone()
+                    if not shift or shift["week_status"] not in ("published", "closed") or not can_access_branch(conn, auth, shift["branch_id"]):
+                        json_response(self, 403, {"error": "forbidden"}); return
+                    branch_id = shift["branch_id"]
+                    existing = conn.execute(
+                        "SELECT id FROM time_clock_entries WHERE user_id=? AND shift_id=?",
+                        (auth["uid"], shift_id)
+                    ).fetchone()
+                    if existing:
+                        json_response(self, 409, {"error": "entry_exists"}); return
+                else:
+                    allowed = accessible_branch_ids(conn, auth)
+                    if allowed:
+                        branch_id = allowed[0]
                 rate_override = body.get("rateOverride") or "auto"
                 if rate_override not in ("auto", "regular", "premium"):
                     rate_override = "auto"
+                today = datetime.fromtimestamp(now, APP_TZ).strftime("%Y-%m-%d")
                 cur = conn.execute("""
-                    INSERT INTO time_clock_entries(shift_id,user_id,clock_in,rate_override,manual_edit,created_at,updated_at)
-                    VALUES(?,?,?,?,0,?,?)
-                """, (shift_id, auth["uid"], now, rate_override, now, now))
+                    INSERT INTO time_clock_entries(shift_id,user_id,branch_id,entry_date,clock_in,rate_override,manual_edit,created_at,updated_at)
+                    VALUES(?,?,?,?,?,?,?,?,?)
+                """, (shift_id or None, auth["uid"], branch_id, today, now, rate_override, 0 if shift_id else 1, now, now))
                 audit(conn, auth["uid"], "time_clock_in", "time_clock", cur.lastrowid)
             json_response(self, 201, {"ok": True, "id": cur.lastrowid})
             return

@@ -5080,10 +5080,10 @@ function renderTimeClockTop() {
       <div class="tc-orbit" aria-hidden="true"><span></span></div>
       <div class="tc-idle-copy">
         <strong>${wageMissing ? "ממתין להגדרת שכר" : "לא במשמרת"}</strong>
-        <span>${autoShift ? "לחיצה ארוכה תתחיל חתימה למשמרת של היום" : "לא נמצאה משמרת לחתימה ביום הנוכחי"}</span>
+        <span>${autoShift ? "לחיצה ארוכה תתחיל חתימה למשמרת של היום" : "לחיצה ארוכה תתחיל חתימה חופשית להיום"}</span>
       </div>
-      <div class="tc-auto-shift">${autoShift ? escapeHtml(shiftChoiceLabel(autoShift)) : "אפשר להוסיף חתימה ידנית דרך +"}</div>
-      <button class="tc-fingerprint-btn" id="tcClockInBtn" type="button" data-shift-id="${autoShift?.id || ""}" ${autoShift && !wageMissing ? "" : "disabled"} aria-label="לחיצה ארוכה לכניסה">
+      <div class="tc-auto-shift">${autoShift ? escapeHtml(shiftChoiceLabel(autoShift)) : "חתימה חופשית · היום"}</div>
+      <button class="tc-fingerprint-btn" id="tcClockInBtn" type="button" data-shift-id="${autoShift?.id || ""}" ${!wageMissing ? "" : "disabled"} aria-label="לחיצה ארוכה לכניסה">
         <span class="tc-fingerprint-core" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none">
             <path d="M12 3.5c-3.6 0-6.5 2.8-6.5 6.3v1.1" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
@@ -5160,9 +5160,8 @@ function bindTimeClockLongPress() {
 
 async function clockInSelectedShift() {
   const shiftId = Number(document.getElementById("tcClockInBtn")?.dataset.shiftId || 0);
-  if (!shiftId) return;
   try {
-    await api("POST", "/api/time-clock/clock-in", { shiftId });
+    await api("POST", "/api/time-clock/clock-in", shiftId ? { shiftId } : {});
     await renderTimeClock();
   } catch (e) {
     if (e.data?.error === "active_clock_exists") alert("יש כבר משמרת פעילה");
