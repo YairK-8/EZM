@@ -59,6 +59,16 @@ APP_TZ = ZoneInfo(os.environ.get("EZM_TIMEZONE", "Asia/Jerusalem"))
 _scheduler_started = False
 SHIFT_SLOTS = ("morning", "middle", "evening")
 DEFAULT_SHIFT_SLOTS = ("morning", "evening")
+TRAVEL_FARE_ONE_WAY = 8
+MONTHLY_TRAVEL_CAP = 230
+JEWISH_HOLIDAYS = {
+    "2026-04-02", "2026-04-03", "2026-04-08", "2026-04-09",
+    "2026-05-22", "2026-09-12", "2026-09-13", "2026-09-21",
+    "2026-09-26", "2026-09-27", "2026-10-03", "2026-10-04",
+    "2027-03-23", "2027-03-24", "2027-03-29", "2027-03-30",
+    "2027-06-11", "2027-10-02", "2027-10-03", "2027-10-11",
+    "2027-10-16", "2027-10-17", "2027-10-23", "2027-10-24",
+}
 SHIFT_SLOT_LABELS = {"morning": "בוקר", "middle": "אמצע", "evening": "ערב"}
 
 
@@ -154,6 +164,21 @@ def init_db() -> None:
               UNIQUE(shift_id, user_id)
             );
 
+            CREATE TABLE IF NOT EXISTS time_clock_entries (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              shift_id INTEGER REFERENCES shifts(id) ON DELETE CASCADE,
+              user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              branch_id INTEGER REFERENCES branches(id) ON DELETE SET NULL,
+              entry_date TEXT,
+              clock_in INTEGER NOT NULL,
+              clock_out INTEGER,
+              rate_override TEXT NOT NULL DEFAULT 'auto' CHECK(rate_override IN ('auto','regular','premium')),
+              manual_edit INTEGER NOT NULL DEFAULT 0,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              UNIQUE(shift_id, user_id)
+            );
+
             CREATE TABLE IF NOT EXISTS shift_availability (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               shift_id INTEGER NOT NULL REFERENCES shifts(id) ON DELETE CASCADE,
@@ -246,6 +271,7 @@ def init_db() -> None:
         branch_columns = {r["name"] for r in conn.execute("PRAGMA table_info(branches)").fetchall()}
         if "is_blocked" not in branch_columns:
             conn.execute("ALTER TABLE branches ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0")
+        migrate_time_clock_entries(conn)
         request_sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='change_requests'").fetchone()
         if request_sql and "reinforcement" not in (request_sql["sql"] or ""):
             conn.executescript("""
@@ -378,6 +404,45 @@ def migrate_shift_slot_checks(conn: sqlite3.Connection) -> None:
             FROM branch_shift_defaults_old;
             DROP TABLE branch_shift_defaults_old;
         """)
+    conn.execute("PRAGMA foreign_keys=ON")
+
+
+def migrate_time_clock_entries(conn: sqlite3.Connection) -> None:
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='time_clock_entries'").fetchone()
+    if not row:
+        return
+    sql = row["sql"] or ""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(time_clock_entries)").fetchall()}
+    needs_rebuild = "shift_id INTEGER NOT NULL" in sql or "entry_date" not in cols or "branch_id" not in cols
+    if not needs_rebuild:
+        return
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.executescript("""
+        ALTER TABLE time_clock_entries RENAME TO time_clock_entries_old;
+        CREATE TABLE time_clock_entries (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          shift_id INTEGER REFERENCES shifts(id) ON DELETE CASCADE,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          branch_id INTEGER REFERENCES branches(id) ON DELETE SET NULL,
+          entry_date TEXT,
+          clock_in INTEGER NOT NULL,
+          clock_out INTEGER,
+          rate_override TEXT NOT NULL DEFAULT 'auto' CHECK(rate_override IN ('auto','regular','premium')),
+          manual_edit INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(shift_id, user_id)
+        );
+    """)
+    old_cols = {r["name"] for r in conn.execute("PRAGMA table_info(time_clock_entries_old)").fetchall()}
+    branch_expr = "branch_id" if "branch_id" in old_cols else "NULL"
+    entry_date_expr = "entry_date" if "entry_date" in old_cols else "NULL"
+    conn.execute(f"""
+        INSERT OR IGNORE INTO time_clock_entries(id,shift_id,user_id,branch_id,entry_date,clock_in,clock_out,rate_override,manual_edit,created_at,updated_at)
+        SELECT id,shift_id,user_id,{branch_expr},{entry_date_expr},clock_in,clock_out,rate_override,manual_edit,created_at,updated_at
+        FROM time_clock_entries_old
+    """)
+    conn.execute("DROP TABLE time_clock_entries_old")
     conn.execute("PRAGMA foreign_keys=ON")
 
 
@@ -1119,6 +1184,246 @@ def can_change_handled_taxi_request(week_start: str, day_key: str) -> bool:
     return (shift_date - today).days >= 2
 
 
+def local_dt_from_ts(ts: int | None) -> datetime | None:
+    if not ts:
+        return None
+    return datetime.fromtimestamp(int(ts), APP_TZ)
+
+
+def local_iso_from_ts(ts: int | None) -> str | None:
+    dt = local_dt_from_ts(ts)
+    return dt.strftime("%Y-%m-%dT%H:%M") if dt else None
+
+
+def parse_local_iso(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        raw = value.strip()
+        fmt = "%Y-%m-%dT%H:%M" if "T" in raw else "%Y-%m-%d %H:%M"
+        return int(datetime.strptime(raw[:16], fmt).replace(tzinfo=APP_TZ).timestamp())
+    except Exception:
+        return None
+
+
+def month_bounds(month: str | None) -> tuple[datetime, datetime, str]:
+    try:
+        start = datetime.strptime(month or "", "%Y-%m").replace(tzinfo=APP_TZ)
+    except Exception:
+        now_dt = datetime.now(APP_TZ)
+        start = datetime(now_dt.year, now_dt.month, 1, tzinfo=APP_TZ)
+    if start.month == 12:
+        end = datetime(start.year + 1, 1, 1, tzinfo=APP_TZ)
+    else:
+        end = datetime(start.year, start.month + 1, 1, tzinfo=APP_TZ)
+    return start, end, start.strftime("%Y-%m")
+
+
+def time_clock_retention_bounds() -> tuple[datetime, datetime, str, str]:
+    now_dt = datetime.now(APP_TZ)
+    current_start = datetime(now_dt.year, now_dt.month, 1, tzinfo=APP_TZ)
+    if current_start.month == 1:
+        previous_start = datetime(current_start.year - 1, 12, 1, tzinfo=APP_TZ)
+    else:
+        previous_start = datetime(current_start.year, current_start.month - 1, 1, tzinfo=APP_TZ)
+    if current_start.month == 12:
+        next_start = datetime(current_start.year + 1, 1, 1, tzinfo=APP_TZ)
+    else:
+        next_start = datetime(current_start.year, current_start.month + 1, 1, tzinfo=APP_TZ)
+    return previous_start, next_start, previous_start.strftime("%Y-%m"), current_start.strftime("%Y-%m")
+
+
+def time_clock_month_bounds(month: str | None) -> tuple[datetime, datetime, str]:
+    start, _, normalized = month_bounds(month)
+    previous_start, next_start, previous_key, current_key = time_clock_retention_bounds()
+    if start < previous_start:
+        return month_bounds(previous_key)
+    if start >= next_start:
+        return month_bounds(current_key)
+    return month_bounds(normalized)
+
+
+def cleanup_time_clock_entries(conn: sqlite3.Connection, user_id: int | None = None) -> None:
+    previous_start, _, _, _ = time_clock_retention_bounds()
+    params: list[int] = [int(previous_start.timestamp())]
+    where_user = ""
+    if user_id is not None:
+        where_user = " AND user_id=?"
+        params.append(int(user_id))
+    conn.execute(f"""
+        DELETE FROM time_clock_entries
+        WHERE clock_in < ?
+          AND clock_out IS NOT NULL
+          {where_user}
+    """, params)
+
+
+def time_clock_rate_type(row: sqlite3.Row) -> str:
+    override = row["rate_override"] if "rate_override" in row.keys() else "auto"
+    if override == "regular":
+        return "regular"
+    if override == "premium":
+        return "premium"
+    shift_date = shift_date_from_week(row["week_start"], row["day_key"]) if row["week_start"] and row["day_key"] else None
+    if not shift_date and row["entry_date"]:
+        try:
+            shift_date = datetime.strptime(row["entry_date"], "%Y-%m-%d").date()
+        except Exception:
+            shift_date = None
+    iso = shift_date.isoformat() if shift_date else ""
+    day_key = row["day_key"] or ("sat" if shift_date and shift_date.weekday() == 5 else "")
+    return "premium" if day_key == "sat" else "regular"
+
+
+def calculate_time_clock_pay(hours: float, hourly_wage: float, rate_type: str) -> dict:
+    hours = max(0.0, float(hours or 0))
+    wage = float(hourly_wage or 0)
+    if rate_type == "premium":
+        premium = hours
+        gross = premium * wage * 1.5
+        return {"regularHours": 0, "overtime125Hours": 0, "overtime150Hours": round(premium, 2), "gross": round(gross, 2)}
+    regular = min(hours, 8)
+    overtime125 = min(max(hours - 8, 0), 2)
+    overtime150 = max(hours - 10, 0)
+    gross = regular * wage + overtime125 * wage * 1.25 + overtime150 * wage * 1.5
+    return {
+        "regularHours": round(regular, 2),
+        "overtime125Hours": round(overtime125, 2),
+        "overtime150Hours": round(overtime150, 2),
+        "gross": round(gross, 2),
+    }
+
+
+def ser_time_clock_entry(row: sqlite3.Row, hourly_wage: float) -> dict:
+    clock_in = int(row["clock_in"])
+    clock_out = int(row["clock_out"]) if row["clock_out"] else None
+    end_ts = clock_out or int(time.time())
+    hours = max(0, (end_ts - clock_in) / 3600)
+    rate_type = time_clock_rate_type(row)
+    pay = calculate_time_clock_pay(hours, hourly_wage, rate_type)
+    shift_date = shift_date_from_week(row["week_start"], row["day_key"]) if row["week_start"] and row["day_key"] else None
+    if not shift_date and row["entry_date"]:
+        try:
+            shift_date = datetime.strptime(row["entry_date"], "%Y-%m-%d").date()
+        except Exception:
+            shift_date = None
+    manual_day_key = ""
+    if shift_date:
+        manual_day_key = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"][shift_date.weekday()]
+    return {
+        "id": row["id"],
+        "shiftId": row["shift_id"],
+        "branchId": row["branch_id"],
+        "branchName": row["branch_name"],
+        "branchNumber": row["branch_number"],
+        "weekStart": row["week_start"],
+        "dayKey": row["day_key"] or manual_day_key,
+        "slot": row["slot"] or "manual",
+        "shiftHours": row["hours"] or "",
+        "shiftDate": shift_date.isoformat() if shift_date else None,
+        "entryDate": row["entry_date"],
+        "clockIn": local_iso_from_ts(clock_in),
+        "clockOut": local_iso_from_ts(clock_out),
+        "isOpen": clock_out is None,
+        "rateOverride": row["rate_override"],
+        "rateType": rate_type,
+        "manualEdit": bool(row["manual_edit"]),
+        "hours": round(hours, 2),
+        "pay": pay,
+    }
+
+
+def time_clock_rows_for_month(conn: sqlite3.Connection, user_id: int, month: str | None) -> tuple[list[sqlite3.Row], sqlite3.Row | None, str]:
+    cleanup_time_clock_entries(conn, user_id)
+    start, end, normalized_month = time_clock_month_bounds(month)
+    rows = conn.execute("""
+        SELECT tce.*, s.day_key, s.slot, s.hours, w.week_start, COALESCE(w.branch_id, tce.branch_id) AS branch_id,
+               b.name AS branch_name, b.number AS branch_number
+        FROM time_clock_entries tce
+        LEFT JOIN shifts s ON s.id=tce.shift_id
+        LEFT JOIN weeks w ON w.id=s.week_id
+        LEFT JOIN branches b ON b.id=COALESCE(w.branch_id, tce.branch_id)
+        WHERE tce.user_id=?
+          AND tce.clock_in >= ?
+          AND tce.clock_in < ?
+        ORDER BY tce.clock_in ASC
+    """, (user_id, int(start.timestamp()), int(end.timestamp()))).fetchall()
+    open_entry = conn.execute("""
+        SELECT tce.*, s.day_key, s.slot, s.hours, w.week_start, COALESCE(w.branch_id, tce.branch_id) AS branch_id,
+               b.name AS branch_name, b.number AS branch_number
+        FROM time_clock_entries tce
+        LEFT JOIN shifts s ON s.id=tce.shift_id
+        LEFT JOIN weeks w ON w.id=s.week_id
+        LEFT JOIN branches b ON b.id=COALESCE(w.branch_id, tce.branch_id)
+        WHERE tce.user_id=? AND tce.clock_out IS NULL
+        ORDER BY tce.clock_in DESC
+        LIMIT 1
+    """, (user_id,)).fetchone()
+    return rows, open_entry, normalized_month
+
+
+def time_clock_available_shifts(conn: sqlite3.Connection, auth: dict, month: str | None) -> list[dict]:
+    start, end, _ = time_clock_month_bounds(month)
+    allowed = accessible_branch_ids(conn, auth)
+    if not allowed:
+        return []
+    placeholders = ",".join("?" for _ in allowed)
+    rows = conn.execute(f"""
+        SELECT s.*, w.week_start, w.branch_id, b.name AS branch_name, b.number AS branch_number
+        FROM shifts s
+        JOIN weeks w ON w.id=s.week_id
+        JOIN branches b ON b.id=w.branch_id
+        JOIN shift_assignments sa ON sa.shift_id=s.id AND sa.user_id=?
+        WHERE w.status IN ('published','closed')
+          AND w.branch_id IN ({placeholders})
+          AND date(w.week_start, '+' ||
+            CASE s.day_key WHEN 'sun' THEN 0 WHEN 'mon' THEN 1 WHEN 'tue' THEN 2 WHEN 'wed' THEN 3
+                           WHEN 'thu' THEN 4 WHEN 'fri' THEN 5 ELSE 6 END || ' days') >= date(?)
+          AND date(w.week_start, '+' ||
+            CASE s.day_key WHEN 'sun' THEN 0 WHEN 'mon' THEN 1 WHEN 'tue' THEN 2 WHEN 'wed' THEN 3
+                           WHEN 'thu' THEN 4 WHEN 'fri' THEN 5 ELSE 6 END || ' days') < date(?)
+        ORDER BY w.week_start, s.day_key,
+          CASE s.slot WHEN 'morning' THEN 1 WHEN 'middle' THEN 2 WHEN 'evening' THEN 3 ELSE 9 END
+    """, (auth["uid"], *allowed, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))).fetchall()
+    result = []
+    for row in rows:
+        shift_date = shift_date_from_week(row["week_start"], row["day_key"])
+        result.append({
+            "id": row["id"],
+            "branchId": row["branch_id"],
+            "branchName": row["branch_name"],
+            "branchNumber": row["branch_number"],
+            "weekStart": row["week_start"],
+            "dayKey": row["day_key"],
+            "slot": row["slot"],
+            "hours": row["hours"],
+            "date": shift_date.isoformat() if shift_date else "",
+            "isHoliday": bool(shift_date and shift_date.isoformat() in JEWISH_HOLIDAYS),
+        })
+    return result
+
+
+def time_clock_summary(entries: list[dict], hourly_wage: float) -> dict:
+    closed = [e for e in entries if not e["isOpen"]]
+    work_days = len({e["shiftDate"] or e["clockIn"][:10] for e in closed})
+    travel = MONTHLY_TRAVEL_CAP if work_days > 15 else work_days * 2 * TRAVEL_FARE_ONE_WAY
+    totals = {
+        "hours": round(sum(e["hours"] for e in closed), 2),
+        "regularHours": round(sum(e["pay"]["regularHours"] for e in closed), 2),
+        "overtime125Hours": round(sum(e["pay"]["overtime125Hours"] for e in closed), 2),
+        "overtime150Hours": round(sum(e["pay"]["overtime150Hours"] for e in closed), 2),
+        "basePay": round(sum(e["pay"]["gross"] for e in closed), 2),
+        "travelPay": round(travel, 2),
+        "totalPay": round(sum(e["pay"]["gross"] for e in closed) + travel, 2),
+        "workDays": work_days,
+        "hourlyWage": float(hourly_wage or 0),
+        "travelFareOneWay": TRAVEL_FARE_ONE_WAY,
+        "monthlyTravelCap": MONTHLY_TRAVEL_CAP,
+        "travelMode": "monthly" if work_days > 15 else "daily",
+    }
+    return totals
+
+
 def shift_has_passed(week_start: str, day_key: str, hours: str) -> bool:
     shift_date = shift_date_from_week(week_start, day_key)
     if not shift_date:
@@ -1758,6 +2063,33 @@ class EZMHandler(SimpleHTTPRequestHandler):
             json_response(self, 200, {"settings": settings})
             return
 
+        if path == "/api/time-clock":
+            auth = require_auth(self)
+            if not auth: return
+            if auth["role"] != "employee":
+                json_response(self, 403, {"error": "employee_only"}); return
+            month = qs.get("month", [None])[0]
+            with db() as conn:
+                user = conn.execute("SELECT * FROM users WHERE id=?", (auth["uid"],)).fetchone()
+                rows, open_row, normalized_month = time_clock_rows_for_month(conn, auth["uid"], month)
+                hourly = float(user["hourly_wage"] or 0) if user else 0
+                entries = [ser_time_clock_entry(r, hourly) for r in rows]
+                open_entry = ser_time_clock_entry(open_row, hourly) if open_row else None
+                available = time_clock_available_shifts(conn, auth, normalized_month)
+            json_response(self, 200, {
+                "month": normalized_month,
+                "entries": entries,
+                "openEntry": open_entry,
+                "availableShifts": available,
+                "summary": time_clock_summary(entries, hourly),
+                "settings": {
+                    "hourlyWage": hourly,
+                    "travelFareOneWay": TRAVEL_FARE_ONE_WAY,
+                    "monthlyTravelCap": MONTHLY_TRAVEL_CAP,
+                },
+            })
+            return
+
         # Audit log
         if path == "/api/audit":
             auth = require_auth(self, "network-manager")
@@ -1859,7 +2191,7 @@ class EZMHandler(SimpleHTTPRequestHandler):
         ALLOWED_DEV_TABLES = {
             "users", "branches", "user_branches", "weeks", "shifts",
             "shift_assignments", "shift_availability", "day_reports",
-            "change_requests", "audit_log", "otp_codes", "notification_log", "app_settings",
+            "change_requests", "time_clock_entries", "audit_log", "otp_codes", "notification_log", "app_settings",
         }
         if path.startswith("/api/dev/db/"):
             if not require_dev(self): return
@@ -1965,6 +2297,97 @@ class EZMHandler(SimpleHTTPRequestHandler):
                 branch_ids = [r["branch_id"] for r in conn.execute("SELECT branch_id FROM user_branches WHERE user_id=?", (user["id"],)).fetchall()]
             effective_role = "employee" if login_as_employee and user["role"] != "employee" else user["role"]
             json_response(self, 200, {"token": make_token(user, effective_role), "user": ser_user(user, branch_ids, effective_role)})
+            return
+
+        if path == "/api/time-clock":
+            auth = require_auth(self)
+            if not auth: return
+            if auth["role"] != "employee":
+                json_response(self, 403, {"error": "employee_only"}); return
+            entry_date = (body.get("entryDate") or "").strip()
+            clock_in = parse_local_iso(body.get("clockIn"))
+            clock_out = parse_local_iso(body.get("clockOut"))
+            try:
+                entry_date_dt = datetime.strptime(entry_date, "%Y-%m-%d").replace(tzinfo=APP_TZ)
+            except Exception:
+                json_response(self, 400, {"error": "invalid_entry_date"}); return
+            previous_start, next_start, _, _ = time_clock_retention_bounds()
+            if entry_date_dt < previous_start or entry_date_dt >= next_start:
+                json_response(self, 400, {"error": "entry_date_out_of_range"}); return
+            if not clock_in or not clock_out or clock_out <= clock_in:
+                json_response(self, 400, {"error": "invalid_clock_range"}); return
+            with db() as conn:
+                cleanup_time_clock_entries(conn, auth["uid"])
+                user = conn.execute("SELECT * FROM users WHERE id=?", (auth["uid"],)).fetchone()
+                if not user or not user["hourly_wage"]:
+                    json_response(self, 409, {"error": "hourly_wage_required"}); return
+                allowed = accessible_branch_ids(conn, auth)
+                branch_id = int(body.get("branchId") or 0)
+                if allowed and (not branch_id or branch_id not in allowed):
+                    branch_id = allowed[0]
+                if not branch_id:
+                    json_response(self, 403, {"error": "branch_forbidden"}); return
+                open_entry = conn.execute(
+                    "SELECT id FROM time_clock_entries WHERE user_id=? AND clock_out IS NULL",
+                    (auth["uid"],)
+                ).fetchone()
+                if open_entry:
+                    json_response(self, 409, {"error": "active_clock_exists"}); return
+                rate_override = body.get("rateOverride") or "auto"
+                if rate_override not in ("auto", "regular", "premium"):
+                    rate_override = "auto"
+                cur = conn.execute("""
+                    INSERT INTO time_clock_entries(shift_id,user_id,branch_id,entry_date,clock_in,clock_out,rate_override,manual_edit,created_at,updated_at)
+                    VALUES(NULL,?,?,?,?,?,?,1,?,?)
+                """, (auth["uid"], branch_id, entry_date, clock_in, clock_out, rate_override, now, now))
+                audit(conn, auth["uid"], "time_clock_manual_create", "time_clock", cur.lastrowid)
+            json_response(self, 201, {"ok": True, "id": cur.lastrowid})
+            return
+
+        if path == "/api/time-clock/clock-in":
+            auth = require_auth(self)
+            if not auth: return
+            if auth["role"] != "employee":
+                json_response(self, 403, {"error": "employee_only"}); return
+            shift_id = int(body.get("shiftId") or 0)
+            with db() as conn:
+                user = conn.execute("SELECT * FROM users WHERE id=?", (auth["uid"],)).fetchone()
+                if not user or not user["hourly_wage"]:
+                    json_response(self, 409, {"error": "hourly_wage_required"}); return
+                shift = conn.execute("""
+                    SELECT s.*, w.week_start, w.status AS week_status, w.branch_id
+                    FROM shifts s JOIN weeks w ON w.id=s.week_id
+                    WHERE s.id=?
+                """, (shift_id,)).fetchone()
+                if not shift or shift["week_status"] not in ("published", "closed") or not can_access_branch(conn, auth, shift["branch_id"]):
+                    json_response(self, 403, {"error": "forbidden"}); return
+                assigned = conn.execute(
+                    "SELECT 1 FROM shift_assignments WHERE shift_id=? AND user_id=?",
+                    (shift_id, auth["uid"])
+                ).fetchone()
+                if not assigned:
+                    json_response(self, 403, {"error": "not_assigned"}); return
+                open_entry = conn.execute(
+                    "SELECT id FROM time_clock_entries WHERE user_id=? AND clock_out IS NULL",
+                    (auth["uid"],)
+                ).fetchone()
+                if open_entry:
+                    json_response(self, 409, {"error": "active_clock_exists"}); return
+                existing = conn.execute(
+                    "SELECT id FROM time_clock_entries WHERE user_id=? AND shift_id=?",
+                    (auth["uid"], shift_id)
+                ).fetchone()
+                if existing:
+                    json_response(self, 409, {"error": "entry_exists"}); return
+                rate_override = body.get("rateOverride") or "auto"
+                if rate_override not in ("auto", "regular", "premium"):
+                    rate_override = "auto"
+                cur = conn.execute("""
+                    INSERT INTO time_clock_entries(shift_id,user_id,clock_in,rate_override,manual_edit,created_at,updated_at)
+                    VALUES(?,?,?,?,0,?,?)
+                """, (shift_id, auth["uid"], now, rate_override, now, now))
+                audit(conn, auth["uid"], "time_clock_in", "time_clock", cur.lastrowid)
+            json_response(self, 201, {"ok": True, "id": cur.lastrowid})
             return
 
         # Register employee (public)
@@ -2440,6 +2863,77 @@ class EZMHandler(SimpleHTTPRequestHandler):
         body = read_json(self)
         now = int(time.time())
 
+        if path == "/api/me/pay-settings":
+            auth = require_auth(self)
+            if not auth: return
+            if auth["role"] != "employee":
+                json_response(self, 403, {"error": "employee_only"}); return
+            try:
+                hourly_wage = float(body.get("hourlyWage") or 0)
+            except (TypeError, ValueError):
+                hourly_wage = 0
+            if hourly_wage <= 0:
+                json_response(self, 400, {"error": "invalid_hourly_wage"}); return
+            with db() as conn:
+                conn.execute("UPDATE users SET hourly_wage=? WHERE id=?", (hourly_wage, auth["uid"]))
+                user = conn.execute("SELECT * FROM users WHERE id=?", (auth["uid"],)).fetchone()
+                branch_ids = [r["branch_id"] for r in conn.execute("SELECT branch_id FROM user_branches WHERE user_id=?", (auth["uid"],)).fetchall()]
+                audit(conn, auth["uid"], "update_time_clock_pay_settings", "user", auth["uid"])
+            json_response(self, 200, {"ok": True, "user": ser_user(user, branch_ids, auth["role"])})
+            return
+
+        if path.startswith("/api/time-clock/"):
+            auth = require_auth(self)
+            if not auth: return
+            if auth["role"] != "employee":
+                json_response(self, 403, {"error": "employee_only"}); return
+            parts = path.strip("/").split("/")
+            if len(parts) < 3:
+                json_response(self, 404, {"error": "not_found"}); return
+            try:
+                entry_id = int(parts[2])
+            except ValueError:
+                json_response(self, 404, {"error": "not_found"}); return
+            is_clock_out = len(parts) == 4 and parts[3] == "clock-out"
+            with db() as conn:
+                entry = conn.execute("SELECT * FROM time_clock_entries WHERE id=? AND user_id=?", (entry_id, auth["uid"])).fetchone()
+                if not entry:
+                    json_response(self, 404, {"error": "not_found"}); return
+                if is_clock_out:
+                    if entry["clock_out"] is not None:
+                        json_response(self, 409, {"error": "already_closed"}); return
+                    conn.execute("UPDATE time_clock_entries SET clock_out=?, updated_at=? WHERE id=?", (now, now, entry_id))
+                    audit(conn, auth["uid"], "time_clock_out", "time_clock", entry_id)
+                    json_response(self, 200, {"ok": True})
+                    return
+
+                clock_in = parse_local_iso(body.get("clockIn")) if "clockIn" in body else entry["clock_in"]
+                clock_out = parse_local_iso(body.get("clockOut")) if "clockOut" in body else entry["clock_out"]
+                if body.get("clockOut") in ("", None) and "clockOut" in body:
+                    clock_out = None
+                rate_override = body.get("rateOverride", entry["rate_override"]) or "auto"
+                if rate_override not in ("auto", "regular", "premium"):
+                    json_response(self, 400, {"error": "invalid_rate_override"}); return
+                if not clock_in:
+                    json_response(self, 400, {"error": "invalid_clock_in"}); return
+                if clock_out is not None and clock_out <= clock_in:
+                    json_response(self, 400, {"error": "invalid_clock_out"}); return
+                if clock_out is None:
+                    other_open = conn.execute(
+                        "SELECT id FROM time_clock_entries WHERE user_id=? AND clock_out IS NULL AND id != ?",
+                        (auth["uid"], entry_id)
+                    ).fetchone()
+                    if other_open:
+                        json_response(self, 409, {"error": "active_clock_exists"}); return
+                conn.execute("""
+                    UPDATE time_clock_entries
+                    SET clock_in=?, clock_out=?, rate_override=?, manual_edit=1, updated_at=?
+                    WHERE id=?
+                """, (clock_in, clock_out, rate_override, now, entry_id))
+                audit(conn, auth["uid"], "time_clock_manual_update", "time_clock", entry_id)
+            json_response(self, 200, {"ok": True})
+            return
+
         if path == "/api/settings/notifications":
             auth = require_auth(self, "network-manager", "area-manager", "branch-manager")
             if not auth: return
@@ -2795,6 +3289,24 @@ class EZMHandler(SimpleHTTPRequestHandler):
         json_response(self, 404, {"error": "not_found"})
 
     def route_delete(self, path: str) -> None:
+        if path.startswith("/api/time-clock/"):
+            auth = require_auth(self)
+            if not auth: return
+            if auth["role"] != "employee":
+                json_response(self, 403, {"error": "employee_only"}); return
+            try:
+                entry_id = int(path.strip("/").split("/")[-1])
+            except ValueError:
+                json_response(self, 404, {"error": "not_found"}); return
+            with db() as conn:
+                entry = conn.execute("SELECT * FROM time_clock_entries WHERE id=? AND user_id=?", (entry_id, auth["uid"])).fetchone()
+                if not entry:
+                    json_response(self, 404, {"error": "not_found"}); return
+                conn.execute("DELETE FROM time_clock_entries WHERE id=?", (entry_id,))
+                audit(conn, auth["uid"], "time_clock_delete", "time_clock", entry_id)
+            json_response(self, 200, {"ok": True})
+            return
+
         # Delete optional middle shift if no employee is assigned to it.
         if path.startswith("/api/shifts/"):
             sid = int(path.split("/")[-1])

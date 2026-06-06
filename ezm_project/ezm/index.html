@@ -74,6 +74,9 @@
       <button class="nav-item" data-view="employeePortal">
         <span class="nav-icon">🙋</span> אזור עובד
       </button>
+      <button class="nav-item" data-view="timeClock">
+        <span class="nav-icon">⏱</span> חתימות
+      </button>
       <button class="nav-item" data-view="employeeRequests">
         <span class="nav-icon">📝</span> הבקשות שלי
       </button>
@@ -548,6 +551,39 @@
         </div>
       </div>
 
+      <div class="view" id="timeClockView">
+        <div class="tc-page">
+          <section class="tc-hero-card">
+            <div class="tc-hero-top">
+              <div>
+                <span class="tc-kicker">חתימות</span>
+                <h1>שעון שעות אישי</h1>
+              </div>
+              <button class="employee-logout-btn" id="timeClockLogoutBtn" type="button" aria-label="יציאה">×</button>
+            </div>
+            <div id="timeClockSettings"></div>
+            <div id="timeClockTop"></div>
+          </section>
+
+          <section class="tc-summary-card" id="timeClockSummary"></section>
+          <section class="tc-summary-drawer" id="timeClockSummaryDrawer" hidden></section>
+
+          <section class="tc-month-card">
+            <div class="tc-month-head">
+              <button class="tc-month-btn" id="tcPrevMonth" type="button" aria-label="חודש קודם">›</button>
+              <div>
+                <span class="tc-kicker">משמרות</span>
+                <h2 id="tcMonthLabel">—</h2>
+              </div>
+              <button class="tc-add-btn" id="tcAddEntry" type="button" aria-label="הוסף חתימה ידנית">+</button>
+              <button class="tc-export-btn" id="tcExportEntries" type="button" aria-label="יצוא חתימות">📤</button>
+              <button class="tc-month-btn" id="tcNextMonth" type="button" aria-label="חודש הבא">‹</button>
+            </div>
+            <div id="timeClockEntries" class="tc-entry-list"></div>
+          </section>
+        </div>
+      </div>
+
       <div class="view" id="employeeRequestsView">
         <div class="page-header">
           <div class="page-header-text"><h1 id="reqViewTitle">הבקשות שלי</h1><p id="reqViewSub">סטטוס בקשות שעות, היעדרות וחילוף</p></div>
@@ -588,9 +624,10 @@
   </div><!-- /main -->
 
   <nav class="employee-bottom-nav" id="employeeBottomNav" hidden>
-    <button type="button" data-view="employeePortal">לוח משמרות</button>
-    <button type="button" data-view="employeeRequests">הבקשות שלי <span class="bottom-nav-badge" id="employeeRequestsBadge" hidden>0</span></button>
-    <button type="button" data-view="reports">דוח סוף יום</button>
+    <button type="button" data-view="employeePortal" aria-label="לוח משמרות"><span class="employee-nav-icon">📅</span></button>
+    <button type="button" data-view="timeClock" aria-label="חתימות"><span class="employee-nav-icon employee-nav-icon-svg" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3.5c-3.6 0-6.5 2.8-6.5 6.3v1.1" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M18.5 11.2V9.8c0-3.5-2.9-6.3-6.5-6.3" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M8.2 10.7c0-2.1 1.7-3.8 3.8-3.8s3.8 1.7 3.8 3.8v1.1c0 2.9-.8 5.1-2.5 7" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M11.9 10.1c.6 0 1.1.5 1.1 1.1v1.5c0 2.7-.7 4.7-2.1 6.4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M8.7 14.1c-.2-1-.3-2.1-.3-3" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M16.6 16.6c.5-1.4.8-3 .8-4.8" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M5.7 14.4c.3 1.6.9 3.1 1.9 4.4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg></span></button>
+    <button type="button" data-view="employeeRequests" aria-label="הבקשות שלי"><span class="employee-nav-icon">📋</span><span class="bottom-nav-badge" id="employeeRequestsBadge" hidden>0</span></button>
+    <button type="button" data-view="reports" aria-label="דוח סוף יום"><span class="employee-nav-icon">📊</span></button>
   </nav>
 </div><!-- /app -->
 

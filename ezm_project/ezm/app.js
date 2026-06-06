@@ -50,6 +50,11 @@ const app = {
   realtimeSource: null,
   realtimeTimer: null,
   realtimePending: false,
+  timeClockMonth: `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,"0")}`,
+  timeClockData: null,
+  timeClockTimer: null,
+  timeClockLongPress: null,
+  timeClockSliding: false,
 };
 
 // ── Date helpers ───────────────────────────────────────────────────────────────
@@ -176,6 +181,120 @@ function weekRangeLabel(weekStart) {
 function dayLabel(weekStart, index) {
   const d = parseIso(addDays(weekStart, index));
   return `${d.getDate()}.${d.getMonth()+1}`;
+}
+
+function currentMonthKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+}
+
+function addMonthsKey(monthKey, diff) {
+  const [y, m] = String(monthKey || currentMonthKey()).split("-").map(Number);
+  const d = new Date(y || new Date().getFullYear(), (m || new Date().getMonth()+1) - 1 + diff, 1);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+}
+
+function previousMonthKey() {
+  return addMonthsKey(currentMonthKey(), -1);
+}
+
+function firstDateOfMonthKey(monthKey) {
+  const [y, m] = String(monthKey || currentMonthKey()).split("-").map(Number);
+  return `${y}-${String(m).padStart(2,"0")}-01`;
+}
+
+function isDateInRange(dateValue, minValue, maxValue) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(dateValue || ""))
+    && dateValue >= minValue
+    && dateValue <= maxValue;
+}
+
+function clampTimeClockMonth(monthKey) {
+  const current = currentMonthKey();
+  const previous = previousMonthKey();
+  return monthKey === previous ? previous : current;
+}
+
+function monthKeyLabel(monthKey) {
+  const [y, m] = String(monthKey || currentMonthKey()).split("-").map(Number);
+  return `${MONTHS[(m || 1) - 1]} ${y || new Date().getFullYear()}`;
+}
+
+function money(value) {
+  return `${Math.round((Number(value) || 0) * 100) / 100} ₪`;
+}
+
+function formatDateTimeLocal(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}T${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+}
+
+function formatTimeInput(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+}
+
+function displayTime(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+}
+
+function displayShortDate(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return `${d.getDate()}.${d.getMonth()+1}`;
+}
+
+function elapsedLabel(ms) {
+  const total = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+}
+
+function durationLabel(hours) {
+  const totalMinutes = Math.max(0, Math.round((Number(hours) || 0) * 60));
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (!h) return `${m} דקות`;
+  if (!m) return h === 1 ? "שעה" : `${h} שעות`;
+  return h === 1 ? `שעה ו-${m} דקות` : `${h} שעות ו-${m} דקות`;
+}
+
+function rateBreakdownHtml(pay = {}) {
+  const rows = [
+    ["100%", pay.regularHours],
+    ["125%", pay.overtime125Hours],
+    ["150%", pay.overtime150Hours],
+  ].filter(([, hours]) => Number(hours || 0) > 0);
+  if (!rows.length) return `<div class="tc-rate-row"><span>תעריפים</span><strong>אין שעות מחושבות</strong></div>`;
+  return rows.map(([label, hours]) => `
+    <div class="tc-rate-row">
+      <span>${label}</span>
+      <strong>${durationLabel(hours)}</strong>
+    </div>`).join("");
+}
+
+function combineEntryDateAndTime(entry, timeValue, fallbackValue, bumpIfBefore = null) {
+  const value = timeValue || formatTimeInput(fallbackValue);
+  if (!value) return "";
+  const base = new Date(entry.clockIn || entry.shiftDate || fallbackValue || Date.now());
+  if (Number.isNaN(base.getTime())) return "";
+  const [hh, mm] = value.split(":").map(Number);
+  const d = new Date(base.getFullYear(), base.getMonth(), base.getDate(), hh || 0, mm || 0);
+  if (bumpIfBefore) {
+    const compare = new Date(bumpIfBefore);
+    if (!Number.isNaN(compare.getTime()) && d <= compare) d.setDate(d.getDate() + 1);
+  }
+  return formatDateTimeLocal(d);
 }
 
 function escapeHtml(value) {
@@ -506,6 +625,9 @@ async function refreshActiveViewFromRealtime() {
         await refreshCoreData();
         await renderPortal();
         break;
+      case "timeClock":
+        await renderTimeClock();
+        break;
       case "employeeRequests":
         await refreshCoreData();
         await renderPortalRequests();
@@ -551,7 +673,7 @@ const ROLE_VIEWS = {
   "network-manager": ["schedule","employees","requests","reports","area","network"],
   "area-manager":    ["schedule","employees","requests","reports","area"],
   "branch-manager":  ["schedule","employees","requests","reports"],
-  "employee":        ["employeePortal","employeeRequests"],
+  "employee":        ["employeePortal","timeClock","employeeRequests"],
   "developer":       ["developer","schedule","employees","requests","reports","area","network"],
 };
 
@@ -582,6 +704,7 @@ const VIEW_META = {
   area:             "ניהול אזור",
   network:          "ניהול רשת",
   employeePortal:   "הלוז שלי",
+  timeClock:        "חתימות",
   employeeRequests: "הבקשות שלי",
   auth:             "כניסה",
   developer:        "Developer Console",
@@ -589,6 +712,7 @@ const VIEW_META = {
 
 function showView(name) {
   app.activeView = name;
+  if (name !== "timeClock") stopTimeClockTimer();
   setMenuOpen(false);
   document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
   const el = document.getElementById(name + "View");
@@ -617,6 +741,7 @@ function showView(name) {
   if (name === "area")      loadAreaView();
   if (name === "network")   loadNetworkView();
   if (name === "employeePortal") renderPortal();
+  if (name === "timeClock") renderTimeClock();
   if (name === "employeeRequests") renderPortalRequests();
   if (name === "developer") loadDevView();
 }
@@ -2135,7 +2260,7 @@ function openEditHoursModal(assignment, user, shift) {
     closeModal();
     await loadWeekView();
   });
-  document.getElementById("cancelModalBtn").addEventListener("click", closeModal);
+  document.getElementById("cancelModalBtn")?.addEventListener("click", closeModal);
 }
 
 function isValidTime24(value) {
@@ -2205,7 +2330,7 @@ function openDefaultShiftHoursModal(shift) {
       alert("שגיאה בשמירת שעות ברירת מחדל: " + (err.data?.error || err.message));
     }
   });
-  document.getElementById("cancelModalBtn").addEventListener("click", closeModal);
+  document.getElementById("cancelModalBtn")?.addEventListener("click", closeModal);
 }
 
 function openMiddleShiftModal(dayKey) {
@@ -4808,6 +4933,524 @@ async function openEmployeeRequestModal(type, preferredShiftId = null, preferred
   document.getElementById("cancelModalBtn").addEventListener("click", closeModal);
 }
 
+// ── Employee time clock ───────────────────────────────────────────────────────
+function stopTimeClockTimer() {
+  if (app.timeClockTimer) {
+    clearInterval(app.timeClockTimer);
+    app.timeClockTimer = null;
+  }
+}
+
+async function renderTimeClock() {
+  if (!app.user || app.user.role !== "employee") return;
+  stopTimeClockTimer();
+  const month = clampTimeClockMonth(app.timeClockMonth || currentMonthKey());
+  app.timeClockMonth = month;
+  try {
+    const data = await api("GET", `/api/time-clock?month=${encodeURIComponent(month)}`);
+    app.timeClockData = data;
+    app.timeClockMonth = data.month || month;
+  } catch (e) {
+    const status = e.status ? ` (${e.status})` : "";
+    const reason = e.data?.error || e.message || "api_error";
+    document.getElementById("timeClockTop").innerHTML = `
+      <div class="empty-state">
+        לא ניתן לטעון חתימות כרגע${status}
+        <small style="display:block;margin-top:6px;color:#94a3b8">${escapeHtml(reason)}</small>
+      </div>`;
+    return;
+  }
+  renderTimeClockSettings();
+  renderTimeClockTop();
+  renderTimeClockEntries();
+  renderTimeClockSummary();
+}
+
+function renderTimeClockSettings() {
+  const el = document.getElementById("timeClockSettings");
+  const wage = Number(app.timeClockData?.settings?.hourlyWage || app.user?.hourlyWage || 0);
+  if (wage > 0) {
+    el.innerHTML = `<div class="tc-pay-pill">שכר שעתי: <strong>${money(wage)}</strong></div>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="tc-settings-card">
+      <div>
+        <strong>הגדרת שכר שעתי</strong>
+        <span>כדי לחשב שכר ולהתחיל חתימה צריך להזין שכר שעתי.</span>
+      </div>
+      <div class="tc-settings-row">
+        <input id="tcHourlyWage" type="number" min="1" step="0.5" placeholder="שכר שעתי" inputmode="decimal" />
+        <button class="btn btn-primary" id="tcSaveWage" type="button">שמור</button>
+      </div>
+    </div>`;
+  document.getElementById("tcSaveWage")?.addEventListener("click", saveTimeClockWage);
+}
+
+async function saveTimeClockWage() {
+  const hourlyWage = Number(document.getElementById("tcHourlyWage")?.value || 0);
+  if (!hourlyWage) {
+    alert("צריך להזין שכר שעתי תקין");
+    return;
+  }
+  const res = await api("PUT", "/api/me/pay-settings", { hourlyWage });
+  app.user = res.user || { ...app.user, hourlyWage };
+  await renderTimeClock();
+}
+
+function shiftChoiceLabel(shift) {
+  const idx = DAY_KEYS.indexOf(shift.dayKey);
+  const date = shift.date || shift.shiftDate || addDays(shift.weekStart, idx);
+  return `${DAY_LABELS[shift.dayKey] || ""} ${displayShortDate(date)} · ${shiftFullLabel(shift.slot)} · ${shift.hours} · ${shift.branchName || ""}`;
+}
+
+function timeToMinutes(value) {
+  const [h, m] = String(value || "").split(":").map(Number);
+  if (!Number.isFinite(h)) return null;
+  return h * 60 + (Number.isFinite(m) ? m : 0);
+}
+
+function shiftRangeMinutes(shift) {
+  const [startRaw, endRaw] = String(shift?.hours || "").split(/[–-]/).map(x => x.trim());
+  const start = timeToMinutes(startRaw);
+  let end = timeToMinutes(endRaw);
+  if (start === null || end === null) return null;
+  if (end <= start) end += 24 * 60;
+  return { start, end };
+}
+
+function selectedTodayTimeClockShift() {
+  const data = app.timeClockData || {};
+  const existingShiftIds = new Set((data.entries || []).map(e => String(e.shiftId)));
+  const today = fmtDate(new Date());
+  const now = new Date();
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const todayShifts = (data.availableShifts || [])
+    .filter(s => !existingShiftIds.has(String(s.id)))
+    .filter(s => (s.date || s.shiftDate) === today);
+  if (!todayShifts.length) return null;
+  const active = todayShifts.find(s => {
+    const range = shiftRangeMinutes(s);
+    if (!range) return false;
+    const n = nowMinutes < range.start && range.end > 24 * 60 ? nowMinutes + 24 * 60 : nowMinutes;
+    return n >= range.start && n <= range.end;
+  });
+  if (active) return active;
+  const withDistance = todayShifts.map(s => {
+    const range = shiftRangeMinutes(s);
+    const start = range?.start ?? 99999;
+    return { shift: s, distance: Math.abs(start - nowMinutes) };
+  }).sort((a, b) => a.distance - b.distance);
+  return withDistance[0]?.shift || todayShifts[0];
+}
+
+function renderTimeClockTop() {
+  const el = document.getElementById("timeClockTop");
+  const data = app.timeClockData || {};
+  const wageMissing = Number(data.settings?.hourlyWage || 0) <= 0;
+  const open = data.openEntry;
+  if (open) {
+    const rateLabel = open.rateType === "premium" ? "שבת/חג" : "רגיל";
+    el.innerHTML = `
+      <div class="tc-active-card">
+        <div class="tc-active-shift">
+          <span>${escapeHtml(open.branchName || "")}</span>
+          <strong>${escapeHtml(shiftFullLabel(open.slot))}</strong>
+          <small>${escapeHtml(open.shiftHours || "")} · כניסה ${displayTime(open.clockIn)} · ${rateLabel}</small>
+        </div>
+        <div class="tc-orbit" aria-hidden="true"><span></span></div>
+        <div class="tc-live-time" id="tcLiveTimer">00:00:00</div>
+        <div class="tc-active-actions">
+          <button class="btn btn-ghost" id="tcEditOpen" type="button">עדכון</button>
+          <div class="tc-slide" id="tcSlideOut">
+            <span>החלקה לסיום משמרת</span>
+            <button type="button" aria-label="סיום משמרת"></button>
+          </div>
+        </div>
+      </div>`;
+    startTimeClockLiveTimer(open);
+    bindTimeClockSlide(open.id);
+    document.getElementById("tcEditOpen")?.addEventListener("click", () => openTimeClockEntryModal(open));
+    return;
+  }
+
+  const autoShift = selectedTodayTimeClockShift();
+  el.innerHTML = `
+    <div class="tc-idle-card">
+      <div class="tc-orbit" aria-hidden="true"><span></span></div>
+      <div class="tc-idle-copy">
+        <strong>${wageMissing ? "ממתין להגדרת שכר" : "לא במשמרת"}</strong>
+        <span>${autoShift ? "לחיצה ארוכה תתחיל חתימה למשמרת של היום" : "לא נמצאה משמרת לחתימה ביום הנוכחי"}</span>
+      </div>
+      <div class="tc-auto-shift">${autoShift ? escapeHtml(shiftChoiceLabel(autoShift)) : "אפשר להוסיף חתימה ידנית דרך +"}</div>
+      <button class="tc-fingerprint-btn" id="tcClockInBtn" type="button" data-shift-id="${autoShift?.id || ""}" ${autoShift && !wageMissing ? "" : "disabled"} aria-label="לחיצה ארוכה לכניסה">
+        <span class="tc-fingerprint-core" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <path d="M12 3.5c-3.6 0-6.5 2.8-6.5 6.3v1.1" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+            <path d="M18.5 11.2V9.8c0-3.5-2.9-6.3-6.5-6.3" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+            <path d="M8.2 10.7c0-2.1 1.7-3.8 3.8-3.8s3.8 1.7 3.8 3.8v1.1c0 2.9-.8 5.1-2.5 7" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+            <path d="M11.9 10.1c.6 0 1.1.5 1.1 1.1v1.5c0 2.7-.7 4.7-2.1 6.4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+            <path d="M8.7 14.1c-.2-1-.3-2.1-.3-3" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+            <path d="M16.6 16.6c.5-1.4.8-3 .8-4.8" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+            <path d="M5.7 14.4c.3 1.6.9 3.1 1.9 4.4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+          </svg>
+        </span>
+      </button>
+    </div>`;
+  bindTimeClockLongPress();
+}
+
+function startTimeClockLiveTimer(entry) {
+  const tick = () => {
+    const start = new Date(entry.clockIn).getTime();
+    const el = document.getElementById("tcLiveTimer");
+    if (el) el.textContent = elapsedLabel(Date.now() - start);
+  };
+  tick();
+  app.timeClockTimer = setInterval(tick, 1000);
+}
+
+function bindTimeClockLongPress() {
+  const btn = document.getElementById("tcClockInBtn");
+  if (!btn) return;
+  const duration = 920;
+  let startedAt = 0;
+  let frame = 0;
+  let pressing = false;
+  const clear = () => {
+    if (!pressing && !app.timeClockLongPress) return;
+    pressing = false;
+    btn.classList.remove("holding");
+    btn.style.setProperty("--tc-hold-progress", "0");
+    if (app.timeClockLongPress) clearTimeout(app.timeClockLongPress);
+    if (frame) cancelAnimationFrame(frame);
+    app.timeClockLongPress = null;
+    frame = 0;
+  };
+  const tick = () => {
+    const progress = Math.min((performance.now() - startedAt) / duration, 1);
+    btn.style.setProperty("--tc-hold-progress", progress.toFixed(3));
+    if (progress < 1 && app.timeClockLongPress) frame = requestAnimationFrame(tick);
+  };
+  const start = e => {
+    if (btn.disabled) return;
+    if (pressing) return;
+    pressing = true;
+    if (e.cancelable) e.preventDefault();
+    startedAt = performance.now();
+    btn.classList.add("holding");
+    btn.style.setProperty("--tc-hold-progress", "0");
+    frame = requestAnimationFrame(tick);
+    app.timeClockLongPress = setTimeout(async () => {
+      app.timeClockLongPress = null;
+      pressing = false;
+      if (frame) cancelAnimationFrame(frame);
+      frame = 0;
+      btn.style.setProperty("--tc-hold-progress", "1");
+      btn.classList.remove("holding");
+      await clockInSelectedShift();
+    }, duration);
+  };
+  btn.addEventListener("pointerdown", start);
+  btn.addEventListener("touchstart", start, { passive: false });
+  btn.addEventListener("mousedown", start);
+  ["pointerup", "pointerleave", "pointercancel", "touchend", "touchcancel", "mouseup", "mouseleave"].forEach(evt => btn.addEventListener(evt, clear));
+  btn.addEventListener("click", e => e.preventDefault());
+}
+
+async function clockInSelectedShift() {
+  const shiftId = Number(document.getElementById("tcClockInBtn")?.dataset.shiftId || 0);
+  if (!shiftId) return;
+  try {
+    await api("POST", "/api/time-clock/clock-in", { shiftId });
+    await renderTimeClock();
+  } catch (e) {
+    if (e.data?.error === "active_clock_exists") alert("יש כבר משמרת פעילה");
+    else if (e.data?.error === "entry_exists") alert("כבר קיימת חתימה למשמרת הזו");
+    else alert("לא ניתן להתחיל חתימה");
+  }
+}
+
+function bindTimeClockSlide(entryId) {
+  const root = document.getElementById("tcSlideOut");
+  const thumb = root?.querySelector("button");
+  if (!root || !thumb) return;
+  let startX = 0;
+  let max = 0;
+  let currentX = 0;
+  const reset = () => {
+    currentX = 0;
+    thumb.style.transform = "translateX(0)";
+    root.style.setProperty("--tc-slide-progress", "0");
+    root.classList.remove("ready");
+  };
+  thumb.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    app.timeClockSliding = true;
+    startX = e.clientX;
+    max = Math.max(80, root.clientWidth - thumb.clientWidth - 10);
+    thumb.setPointerCapture?.(e.pointerId);
+  });
+  thumb.addEventListener("pointermove", e => {
+    if (!app.timeClockSliding) return;
+    const delta = Math.max(0, e.clientX - startX);
+    const x = Math.min(max, delta);
+    currentX = x;
+    thumb.style.transform = `translateX(${x}px)`;
+    root.style.setProperty("--tc-slide-progress", (x / max).toFixed(3));
+    root.classList.toggle("ready", x > max * 0.7);
+  });
+  thumb.addEventListener("pointerup", async e => {
+    if (!app.timeClockSliding) return;
+    app.timeClockSliding = false;
+    const delta = Math.max(currentX, e.clientX - startX);
+    if (delta > max * 0.7) {
+      try {
+        thumb.style.transform = `translateX(${max}px)`;
+        root.style.setProperty("--tc-slide-progress", "1");
+        await api("PUT", `/api/time-clock/${entryId}/clock-out`, {});
+        await renderTimeClock();
+      } catch {
+        alert("לא ניתן לסיים משמרת");
+        reset();
+      }
+    } else {
+      reset();
+    }
+  });
+}
+
+function renderTimeClockEntries() {
+  const data = app.timeClockData || {};
+  document.getElementById("tcMonthLabel").textContent = monthKeyLabel(app.timeClockMonth);
+  const prevBtn = document.getElementById("tcPrevMonth");
+  const nextBtn = document.getElementById("tcNextMonth");
+  if (prevBtn) {
+    prevBtn.textContent = "‹";
+    prevBtn.disabled = app.timeClockMonth === previousMonthKey();
+  }
+  if (nextBtn) {
+    nextBtn.textContent = "›";
+    nextBtn.disabled = app.timeClockMonth === currentMonthKey();
+  }
+  const list = document.getElementById("timeClockEntries");
+  const entries = [...(data.entries || [])].sort((a, b) => {
+    const aTime = new Date(a.clockIn || a.shiftDate || 0).getTime();
+    const bTime = new Date(b.clockIn || b.shiftDate || 0).getTime();
+    return aTime - bTime;
+  });
+  if (!entries.length) {
+    list.innerHTML = `<div class="tc-empty">אין חתימות בחודש הזה</div>`;
+    return;
+  }
+  list.innerHTML = entries.map(entry => {
+    const rateLabel = entry.rateType === "premium" ? "שבת/חג" : "רגיל";
+    const entryTitle = entry.shiftId ? `${shiftFullLabel(entry.slot)} · ${entry.branchName || ""}` : "חתימה ידנית";
+    return `
+      <button class="tc-entry-row" type="button" data-entry-id="${entry.id}">
+        <span class="tc-entry-date">${displayShortDate(entry.clockIn)}<small>${DAY_LABELS[entry.dayKey] || ""}</small></span>
+        <span class="tc-entry-main">
+          <strong>${escapeHtml(entryTitle)}</strong>
+          <small>מ־${displayTime(entry.clockIn)} עד ${displayTime(entry.clockOut)} · ${rateLabel} · <b>${money(entry.pay?.gross || 0)}</b></small>
+        </span>
+      </button>`;
+  }).join("");
+  list.querySelectorAll("[data-entry-id]").forEach(row => {
+    row.addEventListener("click", () => {
+      const entry = entries.find(e => String(e.id) === row.dataset.entryId);
+      if (entry) openTimeClockEntryModal(entry);
+    });
+  });
+}
+
+function exportTimeClockEntries() {
+  const data = app.timeClockData || {};
+  const entries = [...(data.entries || [])].sort((a, b) => {
+    const aTime = new Date(a.clockIn || a.shiftDate || 0).getTime();
+    const bTime = new Date(b.clockIn || b.shiftDate || 0).getTime();
+    return aTime - bTime;
+  });
+  if (!entries.length) {
+    alert("אין חתימות לייצוא בחודש הזה.");
+    return;
+  }
+  const cell = (value, style = 0) => ({ value, style });
+  const rateLabel = entry => entry.rateType === "premium" ? "שבת/חג" : "רגיל";
+  const title = `חתימות ${monthKeyLabel(app.timeClockMonth)} · ${app.user?.fullName || ""}`;
+  const rows = [
+    [cell(title, 2)],
+    [],
+    ["תאריך", "יום", "סניף", "משמרת", "כניסה", "יציאה", "משך", "תעריף", "שכר"],
+    ...entries.map(entry => [
+      displayShortDate(entry.clockIn),
+      DAY_LABELS[entry.dayKey] || "",
+      entry.branchName || "",
+      entry.shiftId ? shiftFullLabel(entry.slot) : "חתימה ידנית",
+      displayTime(entry.clockIn),
+      displayTime(entry.clockOut),
+      durationLabel(entry.hours),
+      rateLabel(entry),
+      Number(entry.pay?.gross || 0),
+    ]),
+    [],
+    [cell("סיכום", 2), "", "", "", "", "", durationLabel(data.summary?.hours || 0), "", Number(data.summary?.totalPay || 0)],
+    ["שכר שעות", "", "", "", "", "", "", "", Number(data.summary?.basePay || 0)],
+    ["נסיעות", "", "", "", "", "", "", data.summary?.travelMode === "monthly" ? "חופשי חודשי" : "לפי ימים", Number(data.summary?.travelPay || 0)],
+  ];
+  const safeMonth = String(app.timeClockMonth || currentMonthKey()).replace(/[^0-9-]/g, "");
+  downloadXlsx(rows, `חתימות_${app.user?.fullName || "עובד"}_${safeMonth}.xlsx`);
+}
+
+function openTimeClockManualAddModal() {
+  const today = fmtDate(new Date());
+  const minDate = firstDateOfMonthKey(previousMonthKey());
+  modal({
+    kicker: "חתימות",
+    title: "הוספת חתימה ידנית",
+    body: `
+      <div class="form-grid">
+        <div class="field full"><label>תאריך</label><input id="tcManualDate" type="date" value="${today}" min="${minDate}" max="${today}" /></div>
+        <div class="field"><label>כניסה</label><input id="tcManualIn" type="time" step="60" value="09:00" /></div>
+        <div class="field"><label>יציאה</label><input id="tcManualOut" type="time" step="60" value="15:00" /></div>
+        <div class="field full"><label>תעריף</label>
+          <select id="tcManualRate">
+            <option value="auto">אוטומטי לפי יום</option>
+            <option value="regular">רגיל</option>
+            <option value="premium">שבת/חג</option>
+          </select>
+        </div>
+      </div>`,
+    footer: `
+      <button class="btn btn-ghost" id="tcCancelManual" type="button">ביטול</button>
+      <button class="btn btn-primary" id="tcSaveManual" type="button">שמור חתימה</button>`
+  });
+  document.getElementById("tcCancelManual")?.addEventListener("click", closeModal);
+  document.getElementById("tcSaveManual")?.addEventListener("click", async () => {
+    const entryDate = document.getElementById("tcManualDate").value;
+    if (!isDateInRange(entryDate, minDate, today)) {
+      alert(`אפשר להוסיף חתימות רק מתאריך ${minDate} ועד היום.`);
+      return;
+    }
+    const clockIn = `${entryDate}T${document.getElementById("tcManualIn").value}`;
+    let clockOut = `${entryDate}T${document.getElementById("tcManualOut").value}`;
+    if (new Date(clockOut) <= new Date(clockIn)) {
+      const out = new Date(clockOut);
+      out.setDate(out.getDate() + 1);
+      clockOut = formatDateTimeLocal(out);
+    }
+    try {
+      await api("POST", "/api/time-clock", {
+        entryDate,
+        clockIn,
+        clockOut,
+        rateOverride: document.getElementById("tcManualRate").value,
+      });
+      closeModal();
+      await renderTimeClock();
+    } catch (e) {
+      if (e.data?.error === "entry_date_out_of_range") {
+        alert(`אפשר להוסיף חתימות רק מתאריך ${minDate} ועד היום.`);
+      } else {
+        alert("לא ניתן להוסיף חתימה");
+      }
+    }
+  });
+}
+
+function renderTimeClockSummary() {
+  const summary = app.timeClockData?.summary || {};
+  const isCurrent = app.timeClockMonth === currentMonthKey();
+  document.getElementById("timeClockSummary").innerHTML = `
+    <button class="tc-summary-button" id="tcSummaryToggle" type="button">
+      <span>${isCurrent ? "שכר עד כה" : "סיכום חודש"}</span>
+      <strong>${money(summary.totalPay || 0)}</strong>
+      <small>${durationLabel(summary.hours)} · ${summary.workDays || 0} ימי עבודה</small>
+    </button>`;
+  document.getElementById("tcSummaryToggle")?.addEventListener("click", toggleTimeClockSummaryDrawer);
+  renderTimeClockSummaryDrawer(false);
+}
+
+function renderTimeClockSummaryDrawer(open) {
+  const drawer = document.getElementById("timeClockSummaryDrawer");
+  const s = app.timeClockData?.summary || {};
+  drawer.hidden = !open;
+  drawer.innerHTML = `
+    <div class="tc-drawer-grid">
+      <div><span>שעות 100%</span><strong>${s.regularHours || 0}</strong></div>
+      <div><span>שעות 125%</span><strong>${s.overtime125Hours || 0}</strong></div>
+      <div><span>שעות 150%</span><strong>${s.overtime150Hours || 0}</strong></div>
+      <div><span>שכר שעות</span><strong>${money(s.basePay || 0)}</strong></div>
+      <div><span>נסיעות</span><strong>${money(s.travelPay || 0)}</strong><small>${s.travelMode === "monthly" ? "חופשי חודשי" : "לפי ימים"}</small></div>
+      <div><span>סה״כ</span><strong>${money(s.totalPay || 0)}</strong></div>
+    </div>`;
+}
+
+function toggleTimeClockSummaryDrawer() {
+  const drawer = document.getElementById("timeClockSummaryDrawer");
+  renderTimeClockSummaryDrawer(drawer.hidden);
+}
+
+function openTimeClockEntryModal(entry) {
+  const rate = entry.rateOverride || "auto";
+  const clockInTime = formatTimeInput(entry.clockIn);
+  const clockOutTime = formatTimeInput(entry.clockOut);
+  modal({
+    kicker: "חתימה",
+    title: entry.shiftId ? `${shiftFullLabel(entry.slot)} · ${entry.branchName || ""}` : "חתימה ידנית",
+    body: `
+      <div class="tc-modal-summary">
+        <div><span>תאריך</span><strong>${displayShortDate(entry.clockIn || entry.shiftDate)}</strong></div>
+        <div><span>זמן במשמרת</span><strong>${durationLabel(entry.hours)}</strong></div>
+        <div><span>שכר במשמרת</span><strong>${money(entry.pay?.gross || 0)}</strong></div>
+      </div>
+      <div class="tc-rate-breakdown">
+        ${rateBreakdownHtml(entry.pay)}
+      </div>
+      <div class="form-grid">
+        <div class="field"><label>כניסה</label><input id="tcEditIn" type="time" step="60" value="${clockInTime}" /></div>
+        <div class="field"><label>יציאה</label><input id="tcEditOut" type="time" step="60" value="${clockOutTime}" /></div>
+        <div class="field full"><label>תעריף</label>
+          <select id="tcEditRate">
+            <option value="auto" ${rate === "auto" ? "selected" : ""}>אוטומטי לפי יום</option>
+            <option value="regular" ${rate === "regular" ? "selected" : ""}>רגיל</option>
+            <option value="premium" ${rate === "premium" ? "selected" : ""}>שבת/חג</option>
+          </select>
+        </div>
+      </div>`,
+    footer: `
+      <button class="btn btn-danger" id="tcDeleteEntry" type="button">מחק</button>
+      <button class="btn btn-ghost" id="tcCancelEdit" type="button">ביטול</button>
+      <button class="btn btn-primary" id="tcSaveEntry" type="button">שמור</button>`
+  });
+  document.getElementById("tcCancelEdit")?.addEventListener("click", closeModal);
+  document.getElementById("tcDeleteEntry")?.addEventListener("click", async () => {
+    if (!confirm("למחוק את החתימה הזו?")) return;
+    try {
+      await api("DELETE", `/api/time-clock/${entry.id}`);
+      closeModal();
+      await renderTimeClock();
+    } catch (e) {
+      const reason = e.data?.error || e.message || "api_error";
+      alert(`לא ניתן למחוק את החתימה (${e.status || ""}) ${reason}`);
+    }
+  });
+  document.getElementById("tcSaveEntry")?.addEventListener("click", async () => {
+    try {
+      const clockIn = combineEntryDateAndTime(entry, document.getElementById("tcEditIn").value, entry.clockIn);
+      const clockOut = combineEntryDateAndTime(entry, document.getElementById("tcEditOut").value, entry.clockOut, clockIn);
+      await api("PUT", `/api/time-clock/${entry.id}`, {
+        clockIn,
+        clockOut,
+        rateOverride: document.getElementById("tcEditRate").value,
+      });
+      closeModal();
+      await renderTimeClock();
+    } catch {
+      alert("לא ניתן לשמור את החתימה");
+    }
+  });
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 async function bootstrap() {
   loadHolidays(); // fire-and-forget; HOLIDAYS updated in background
@@ -4865,6 +5508,17 @@ async function bootstrap() {
   });
   document.getElementById("devRefreshBtn")?.addEventListener("click", loadDevView);
   document.getElementById("devLogoutBtn")?.addEventListener("click", logout);
+  document.getElementById("timeClockLogoutBtn")?.addEventListener("click", logout);
+  document.getElementById("tcPrevMonth")?.addEventListener("click", () => {
+    app.timeClockMonth = clampTimeClockMonth(addMonthsKey(app.timeClockMonth, -1));
+    renderTimeClock();
+  });
+  document.getElementById("tcNextMonth")?.addEventListener("click", () => {
+    app.timeClockMonth = clampTimeClockMonth(addMonthsKey(app.timeClockMonth, 1));
+    renderTimeClock();
+  });
+  document.getElementById("tcAddEntry")?.addEventListener("click", openTimeClockManualAddModal);
+  document.getElementById("tcExportEntries")?.addEventListener("click", exportTimeClockEntries);
 
   // Modal close
   document.getElementById("closeModal").addEventListener("click", closeModal);
