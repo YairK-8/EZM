@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>EZM · מערכת סידור עבודה</title>
-<link rel="stylesheet" href="styles.css?v=20260603-20" />
+<link rel="stylesheet" href="styles.css?v=20260614-01" />
 <link rel="manifest" href="/manifest.json" />
 <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 <link rel="icon" type="image/png" sizes="1024x1024" href="/EZM-icon.png" />
@@ -137,7 +137,7 @@
 
               <!-- Login Panel -->
               <div class="auth-panel" id="loginPanel">
-                <div class="field">
+                <div class="field" id="loginIdStep">
                   <label>מספר תעודת זהות</label>
                   <div class="auth-input-wrap">
                     <input type="text" id="loginId" placeholder="הכנס מספר תעודת זהות" maxlength="9" inputmode="numeric" />
@@ -146,17 +146,18 @@
                     </span>
                   </div>
                 </div>
-                <div class="field">
+                <div class="field" id="loginCodeStep" hidden>
                   <label>קוד כניסה חד פעמי</label>
-                  <div class="auth-otp-row">
-                    <div class="auth-input-wrap">
-                      <input type="text" id="otpInput" placeholder="הכנס קוד שנשלח למייל" maxlength="6" inputmode="numeric" />
-                      <span class="auth-input-icon">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                      </span>
-                    </div>
-                    <button class="auth-send-code" id="sendCodeBtn" type="button">שלח קוד</button>
+                  <div class="auth-code-grid" id="otpBoxes" dir="ltr">
+                    <input class="auth-code-box" inputmode="numeric" maxlength="1" autocomplete="one-time-code" />
+                    <input class="auth-code-box" inputmode="numeric" maxlength="1" />
+                    <input class="auth-code-box" inputmode="numeric" maxlength="1" />
+                    <input class="auth-code-box" inputmode="numeric" maxlength="1" />
+                    <input class="auth-code-box" inputmode="numeric" maxlength="1" />
+                    <input class="auth-code-box" inputmode="numeric" maxlength="1" />
                   </div>
+                  <input type="text" id="otpInput" maxlength="6" inputmode="numeric" hidden />
+                  <button class="auth-send-code auth-resend-code" id="sendCodeBtn" type="button">שלח קוד מחדש</button>
                 </div>
 
                 <div class="auth-row-between">
@@ -174,7 +175,7 @@
                   </span>
                 </label>
 
-                <button class="auth-btn-primary" id="loginBtn" type="button">התחבר</button>
+                <button class="auth-btn-primary" id="loginBtn" type="button">המשך</button>
                 <div class="auth-note" id="authNote"></div>
 
                 <div style="text-align:center;margin-top:20px">
@@ -200,6 +201,10 @@
                   <div class="field">
                     <label>תעודת זהות</label>
                     <input type="text" id="regId" placeholder="123456789" maxlength="9" inputmode="numeric" />
+                  </div>
+                  <div class="field">
+                    <label>תאריך לידה</label>
+                    <input type="date" id="regBirthDate" />
                   </div>
                   <div class="field">
                     <label>טלפון</label>
@@ -631,6 +636,6 @@
   </nav>
 </div><!-- /app -->
 
-<script src="app.js?v=20260603-20"></script>
+<script src="app.js?v=20260614-01"></script>
 </body>
 </html>

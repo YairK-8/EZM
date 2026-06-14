@@ -88,6 +88,7 @@ def init_db() -> None:
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               full_name TEXT NOT NULL,
               id_number TEXT NOT NULL UNIQUE,
+              birth_date TEXT,
               phone TEXT,
               email TEXT NOT NULL,
               role TEXT NOT NULL CHECK(role IN ('network-manager','area-manager','branch-manager','employee')),
@@ -266,6 +267,8 @@ def init_db() -> None:
         if "max_employees" not in default_columns:
             conn.execute("ALTER TABLE branch_shift_defaults ADD COLUMN max_employees INTEGER")
         user_columns = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "birth_date" not in user_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN birth_date TEXT")
         if "manager_note" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN manager_note TEXT")
         branch_columns = {r["name"] for r in conn.execute("PRAGMA table_info(branches)").fetchall()}
@@ -854,11 +857,28 @@ def read_json(handler: SimpleHTTPRequestHandler) -> dict:
 
 # ── Serializers ───────────────────────────────────────────────────────────────
 
+def normalize_birth_date(value: str | None, *, required: bool = False) -> str | None:
+    value = (value or "").strip()
+    if not value:
+        if required:
+            raise ValueError("birth_date_required")
+        return None
+    try:
+        dt = datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError("invalid_birth_date") from exc
+    today = datetime.now(APP_TZ).date()
+    if dt > today or today.year - dt.year > 100:
+        raise ValueError("invalid_birth_date")
+    return dt.isoformat()
+
+
 def ser_user(row: sqlite3.Row, branch_ids: list[int] | None = None, effective_role: str | None = None) -> dict:
     data = {
         "id": row["id"],
         "fullName": row["full_name"],
         "idNumber": row["id_number"],
+        "birthDate": row["birth_date"] if "birth_date" in row.keys() else None,
         "phone": row["phone"],
         "email": row["email"],
         "role": effective_role or row["role"],
@@ -2224,10 +2244,15 @@ class EZMHandler(SimpleHTTPRequestHandler):
                 if count:
                     json_response(self, 409, {"error": "setup_already_completed"})
                     return
+                try:
+                    birth_date = normalize_birth_date(body.get("birthDate"))
+                except ValueError as exc:
+                    json_response(self, 400, {"error": str(exc)})
+                    return
                 cur = conn.execute(
-                    "INSERT INTO users(full_name,id_number,phone,email,role,status,created_at) VALUES(?,?,?,?,?,?,?)",
+                    "INSERT INTO users(full_name,id_number,birth_date,phone,email,role,status,created_at) VALUES(?,?,?,?,?,?,?,?)",
                     (body.get("fullName","").strip(), body.get("idNumber","").strip(),
-                     body.get("phone","").strip(), body.get("email","").strip(),
+                     birth_date, body.get("phone","").strip(), body.get("email","").strip(),
                      "network-manager", "active", now)
                 )
                 user = conn.execute("SELECT * FROM users WHERE id=?", (cur.lastrowid,)).fetchone()
@@ -2397,10 +2422,11 @@ class EZMHandler(SimpleHTTPRequestHandler):
             with db() as conn:
                 try:
                     branch_id = int(body.get("branchId") or 0)
+                    birth_date = normalize_birth_date(body.get("birthDate"), required=True)
                     cur = conn.execute(
-                        "INSERT INTO users(full_name,id_number,phone,email,role,status,hourly_wage,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                        "INSERT INTO users(full_name,id_number,birth_date,phone,email,role,status,hourly_wage,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
                         (body.get("fullName","").strip(), body.get("idNumber","").strip(),
-                         body.get("phone","").strip(), body.get("email","").strip(),
+                         birth_date, body.get("phone","").strip(), body.get("email","").strip(),
                          "employee", "pending", body.get("hourlyWage"), now)
                     )
                     if branch_id:
@@ -2408,6 +2434,9 @@ class EZMHandler(SimpleHTTPRequestHandler):
                     user = conn.execute("SELECT * FROM users WHERE id=?", (cur.lastrowid,)).fetchone()
                 except sqlite3.IntegrityError:
                     json_response(self, 409, {"error": "id_number_exists"})
+                    return
+                except ValueError as exc:
+                    json_response(self, 400, {"error": str(exc)})
                     return
             json_response(self, 201, {"ok": True, "user": ser_user(user, [branch_id] if branch_id else [])})
             return
@@ -2884,6 +2913,23 @@ class EZMHandler(SimpleHTTPRequestHandler):
             json_response(self, 200, {"ok": True, "user": ser_user(user, branch_ids, auth["role"])})
             return
 
+        if path == "/api/me/birth-date":
+            auth = require_auth(self)
+            if not auth: return
+            if auth.get("role") == "developer":
+                json_response(self, 403, {"error": "forbidden"}); return
+            try:
+                birth_date = normalize_birth_date(body.get("birthDate"), required=True)
+            except ValueError as exc:
+                json_response(self, 400, {"error": str(exc)}); return
+            with db() as conn:
+                conn.execute("UPDATE users SET birth_date=? WHERE id=?", (birth_date, auth["uid"]))
+                user = conn.execute("SELECT * FROM users WHERE id=?", (auth["uid"],)).fetchone()
+                branch_ids = [r["branch_id"] for r in conn.execute("SELECT branch_id FROM user_branches WHERE user_id=?", (auth["uid"],)).fetchall()]
+                audit(conn, auth["uid"], "update_birth_date", "user", auth["uid"])
+            json_response(self, 200, {"ok": True, "user": ser_user(user, branch_ids, auth.get("role"))})
+            return
+
         if path.startswith("/api/time-clock/"):
             auth = require_auth(self)
             if not auth: return
@@ -2961,10 +3007,15 @@ class EZMHandler(SimpleHTTPRequestHandler):
                     json_response(self, 403, {"error": "role_hierarchy_forbidden"}); return
                 if "branchIds" in body and not branch_ids_allowed_for_actor(conn, auth, [int(bid) for bid in body["branchIds"]]):
                     json_response(self, 403, {"error": "branch_forbidden"}); return
+                try:
+                    birth_date = normalize_birth_date(body.get("birthDate")) if "birthDate" in body else (user["birth_date"] if "birth_date" in user.keys() else None)
+                except ValueError as exc:
+                    json_response(self, 400, {"error": str(exc)}); return
                 conn.execute("""
-                    UPDATE users SET full_name=?, phone=?, email=?, role=?, status=?,
+                    UPDATE users SET full_name=?, birth_date=?, phone=?, email=?, role=?, status=?,
                     hourly_wage=?, rank=?, is_lead=?, manager_note=? WHERE id=?
                 """, (body.get("fullName", user["full_name"]),
+                      birth_date,
                       body.get("phone", user["phone"]),
                       body.get("email", user["email"]),
                       new_role,

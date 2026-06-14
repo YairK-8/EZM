@@ -41,6 +41,7 @@ const app = {
   openSelectedShiftAfterLoad: false,
   activeView: null,
   setupRequired: false,
+  loginCodeSent: false,
   employeeBranchFilter: "",
   employeesMissingAvailabilityOnly: false,
   assignmentBranchFilter: "",
@@ -92,6 +93,26 @@ const SHIFT_META = {
   middle:  { label: "אמצע", fullLabel: "משמרת אמצע", icon: "☀" },
   evening: { label: "ערב", fullLabel: "משמרת ערב", icon: "🌙" },
 };
+
+function ageFromBirthDate(birthDate) {
+  if (!birthDate) return null;
+  const birth = parseIso(birthDate);
+  if (Number.isNaN(birth.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - birth.getFullYear();
+  const monthDelta = today.getMonth() - birth.getMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && today.getDate() < birth.getDate())) age -= 1;
+  return age;
+}
+
+function isUnder18(user) {
+  const age = ageFromBirthDate(user?.birthDate);
+  return age !== null && age < 18;
+}
+
+function minorBadge(user) {
+  return isUnder18(user) ? `<span class="minor-badge" title="מתחת לגיל 18">18-</span>` : "";
+}
 const MONTHS     = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
 const WEEKDAY_OPTIONS = [
   { value: 0, label: "שני" },
@@ -880,7 +901,9 @@ function modal({ kicker, title, body, footer = "" }) {
   document.getElementById("modalBackdrop").hidden = false;
 }
 function closeModal() {
+  if (document.getElementById("modalBackdrop")?.classList.contains("modal-required")) return;
   document.getElementById("modalBackdrop").hidden = true;
+  document.getElementById("closeModal").hidden = false;
   if (app.realtimePending) {
     app.realtimePending = false;
     scheduleRealtimeRefresh(80);
@@ -902,14 +925,81 @@ function setLoginAsEmployeeVisible(visible) {
   if (!visible) input.checked = false;
 }
 
+function resetLoginFlow() {
+  app.loginCodeSent = false;
+  document.getElementById("loginIdStep")?.removeAttribute("hidden");
+  const codeStep = document.getElementById("loginCodeStep");
+  if (codeStep) codeStep.hidden = true;
+  document.getElementById("loginId")?.removeAttribute("readonly");
+  const otpInput = document.getElementById("otpInput");
+  if (otpInput) otpInput.value = "";
+  document.querySelectorAll("#otpBoxes .auth-code-box").forEach(input => input.value = "");
+  const loginBtn = document.getElementById("loginBtn");
+  if (loginBtn) loginBtn.textContent = "המשך";
+  setLoginAsEmployeeVisible(false);
+}
+
+function showCodeLoginStep() {
+  app.loginCodeSent = true;
+  const idStep = document.getElementById("loginIdStep");
+  if (idStep) idStep.hidden = true;
+  document.getElementById("loginId")?.setAttribute("readonly", "readonly");
+  const codeStep = document.getElementById("loginCodeStep");
+  if (codeStep) codeStep.hidden = false;
+  const loginBtn = document.getElementById("loginBtn");
+  if (loginBtn) loginBtn.textContent = "התחבר";
+  document.querySelector("#otpBoxes .auth-code-box")?.focus();
+}
+
+function syncOtpBoxes() {
+  const code = [...document.querySelectorAll("#otpBoxes .auth-code-box")].map(input => input.value).join("");
+  const otpInput = document.getElementById("otpInput");
+  if (otpInput) otpInput.value = code;
+  return code;
+}
+
+function bindOtpBoxes() {
+  document.querySelectorAll("#otpBoxes .auth-code-box").forEach((input, index, boxes) => {
+    input.addEventListener("input", e => {
+      const digits = e.target.value.replace(/\D/g, "");
+      if (digits.length > 1) {
+        digits.slice(0, boxes.length - index).split("").forEach((digit, offset) => {
+          boxes[index + offset].value = digit;
+        });
+        const next = boxes[Math.min(index + digits.length, boxes.length - 1)];
+        next?.focus();
+      } else {
+        e.target.value = digits;
+        if (digits && boxes[index + 1]) boxes[index + 1].focus();
+      }
+      syncOtpBoxes();
+    });
+    input.addEventListener("keydown", e => {
+      if (e.key === "Backspace" && !input.value && boxes[index - 1]) {
+        boxes[index - 1].focus();
+      }
+      if (e.key === "Enter") handleLoginPrimaryAction();
+    });
+    input.addEventListener("paste", e => {
+      e.preventDefault();
+      const digits = (e.clipboardData?.getData("text") || "").replace(/\D/g, "").slice(0, boxes.length);
+      boxes.forEach((box, i) => { box.value = digits[i] || ""; });
+      syncOtpBoxes();
+      boxes[Math.min(digits.length, boxes.length) - 1]?.focus();
+    });
+  });
+}
+
 async function sendCode() {
   const id = document.getElementById("loginId").value.trim();
   if (!id) return setAuthNote("יש להזין מספר תעודת זהות.", "error");
   setLoginAsEmployeeVisible(false);
   document.getElementById("sendCodeBtn").disabled = true;
+  document.getElementById("loginBtn").disabled = true;
   try {
     const data = await api("POST", "/api/auth/request-code", { idNumber: id });
     setLoginAsEmployeeVisible(!!data.canLoginAsEmployee);
+    showCodeLoginStep();
     setAuthNote("קוד נשלח לכתובת המייל שלך. תקף 10 דקות.", "success");
   } catch (e) {
     if (e.data?.error === "account_suspended")
@@ -924,12 +1014,17 @@ async function sendCode() {
       setAuthNote("שליחת המייל נכשלה. בדוק הגדרות SMTP.", "error");
   } finally {
     document.getElementById("sendCodeBtn").disabled = false;
+    document.getElementById("loginBtn").disabled = false;
   }
+}
+
+function handleLoginPrimaryAction() {
+  return app.loginCodeSent ? login() : sendCode();
 }
 
 async function login() {
   const idNumber = document.getElementById("loginId").value.trim();
-  const code     = document.getElementById("otpInput").value.trim();
+  const code     = syncOtpBoxes() || document.getElementById("otpInput").value.trim();
   if (!idNumber || !code) return setAuthNote("יש למלא ת.ז. וקוד.", "error");
   document.getElementById("loginBtn").disabled = true;
   let data;
@@ -965,6 +1060,47 @@ async function enterApp() {
   applyRoleAccess();
   startRealtime();
   showView(initialViewForUser());
+  requireBirthDateIfNeeded();
+}
+
+function requireBirthDateIfNeeded() {
+  if (!app.user || app.user.role === "developer" || app.user.birthDate) return;
+  modal({
+    kicker: "פרטים אישיים",
+    title: "נדרש תאריך לידה",
+    body: `
+      <div class="notice notice-info">יש להזין תאריך לידה כדי להמשיך</div>
+      <div class="field">
+        <label>תאריך לידה</label>
+        <input type="date" id="requiredBirthDateInput" max="${fmtDate(new Date())}" />
+      </div>
+      <div class="auth-note" id="requiredBirthDateNote"></div>`,
+    footer: `<button class="btn btn-primary" id="saveRequiredBirthDate" type="button">שמור והמשך</button>`
+  });
+  document.getElementById("closeModal").hidden = true;
+  document.getElementById("modalBackdrop").classList.add("modal-required");
+  document.getElementById("saveRequiredBirthDate").addEventListener("click", async () => {
+    const input = document.getElementById("requiredBirthDateInput");
+    const note = document.getElementById("requiredBirthDateNote");
+    const birthDate = input.value;
+    if (!birthDate) {
+      note.textContent = "יש להזין תאריך לידה.";
+      note.className = "auth-note error";
+      return;
+    }
+    try {
+      const res = await api("PUT", "/api/me/birth-date", { birthDate });
+      app.user = res.user;
+      document.getElementById("closeModal").hidden = false;
+      document.getElementById("modalBackdrop").classList.remove("modal-required");
+      closeModal();
+      applyRoleAccess();
+      if (app.activeView === "employees") renderEmployees();
+    } catch (e) {
+      note.textContent = "תאריך הלידה לא תקין.";
+      note.className = "auth-note error";
+    }
+  });
 }
 
 async function logout() {
@@ -974,6 +1110,7 @@ async function logout() {
   app.currentWeek = null;
   clearStoredToken();
   applyRoleAccess();
+  resetLoginFlow();
   showView("auth");
 }
 
@@ -1223,17 +1360,19 @@ function setRegNote(msg, type = "") {
 async function submitRegistration() {
   const fullName   = document.getElementById("regName").value.trim();
   const idNumber   = document.getElementById("regId").value.trim();
+  const birthDate  = document.getElementById("regBirthDate")?.value || "";
   const phone      = document.getElementById("regPhone").value.trim();
   const email      = document.getElementById("regEmail").value.trim();
   const branchId   = Number(document.getElementById("regBranchSelect").value || 0);
 
   if (!fullName || !idNumber || !email) return setRegNote("יש למלא שם, ת.ז. ומייל.", "error");
+  if (!app.setupRequired && !birthDate) return setRegNote("יש למלא תאריך לידה.", "error");
   if (!app.setupRequired && !branchId) return setRegNote("יש לבחור סניף מהרשימה.", "error");
 
   document.getElementById("submitRegBtn").disabled = true;
   try {
     if (app.setupRequired) {
-      const data = await api("POST", "/api/setup", { fullName, idNumber, phone, email });
+      const data = await api("POST", "/api/setup", { fullName, idNumber, birthDate, phone, email });
       app.setupRequired = false;
       app.token = data.token;
       app.user = data.user;
@@ -1246,7 +1385,7 @@ async function submitRegistration() {
         setRegNote("מנהל הרשת נוצר, אבל טעינת המערכת נכשלה. רענן את הדף ונסה שוב.", "error");
       }
     } else {
-      await api("POST", "/api/users/register", { fullName, idNumber, phone, email, branchId });
+      await api("POST", "/api/users/register", { fullName, idNumber, birthDate, phone, email, branchId });
       setRegNote("ההרשמה נקלטה וממתינה לאישור מנהל.", "success");
     }
   } catch (e) {
@@ -1823,7 +1962,7 @@ function openScheduleShiftModal(shift) {
               return `
                 <div class="person-row">
                   <div class="person-info">
-                    <strong>${u.fullName}</strong>
+                    <strong>${escapeHtml(u.fullName)} ${minorBadge(u)}</strong>
                     <small>${hours} · ${u.rank}${u.isLead ? " · אחמ\"ש" : ""}</small>
                   </div>
                   <div class="person-actions">
@@ -1849,7 +1988,7 @@ function openScheduleShiftModal(shift) {
             ${available.length ? available.map(({ user: u, note }) => `
               <div class="person-row">
                 <div class="person-info">
-                  <strong>${u.fullName}</strong>
+                  <strong>${escapeHtml(u.fullName)} ${minorBadge(u)}</strong>
                   <small>${u.rank}${note ? `<span class="avail-note"> · ${note}</span>` : ""}</small>
                 </div>
                 <button class="btn btn-primary btn-xs" type="button" data-assign-user="${u.id}">שבץ</button>
@@ -2116,7 +2255,7 @@ function renderDrawer() {
     row.className = "person-row";
     row.innerHTML = `
       <div class="person-info">
-        <strong>${u.fullName}</strong>
+        <strong>${escapeHtml(u.fullName)} ${minorBadge(u)}</strong>
         <small>${hours} · ${u.rank}${u.isLead ? " · אחמ\"ש" : ""}${reinfBranches ? ` · <span class="reinf-branch-tag">מתגבר מ${reinfBranches}</span>` : ""}</small>
       </div>
       <div class="person-actions">
@@ -2153,7 +2292,7 @@ function renderDrawer() {
       row.className = "person-row";
       row.innerHTML = `
         <div class="person-info">
-          <strong>${u.fullName}</strong>
+          <strong>${escapeHtml(u.fullName)} ${minorBadge(u)}</strong>
           <small>${u.rank}${note ? `<span class="avail-note"> · ${note}</span>` : ""}</small>
         </div>
         <button class="btn btn-primary btn-xs assign-btn" type="button">שבץ</button>`;
@@ -2598,7 +2737,7 @@ async function renderEmployees() {
     const tagLabel = u.status === "pending" ? "ממתין" : (u.role !== "employee" ? "מנהל" : (u.isLead ? "אחמ\"ש" : u.rank));
     btn.innerHTML = `
       <div style="flex:1;min-width:0">
-        <strong>${u.fullName}</strong>
+        <strong>${escapeHtml(u.fullName)} ${minorBadge(u)}</strong>
         <small>${u.idNumber || ""}</small>
         <span class="employee-week-stats ${stats.availability ? "" : "is-empty"}">
           הגיש ${stats.availability} · שובץ ${stats.assignments}
@@ -2623,7 +2762,7 @@ function employeeDetailMarkup(u, insightGridId = "employeeInsightGrid") {
     <div class="employee-card-header">
       <div class="employee-avatar" style="${u.status === "inactive" ? "opacity:.45;filter:grayscale(1)" : ""}">${(u.fullName||"?")[0]}</div>
       <div>
-        <h2>${escapeHtml(u.fullName)}</h2>
+          <h2>${escapeHtml(u.fullName)} ${minorBadge(u)}</h2>
         <div style="display:flex;gap:8px;align-items:center;margin-top:4px">
           <span class="tag ${tagClass}">${tagLabel}</span>
           <small class="text-muted">${u.role !== "employee" ? "מנהל" : roleLabel(u.role)}</small>
@@ -2632,6 +2771,7 @@ function employeeDetailMarkup(u, insightGridId = "employeeInsightGrid") {
     </div>
     <div class="profile-grid">
       <div class="field-card"><span>תעודת זהות</span><strong>${escapeHtml(u.idNumber || "—")}</strong></div>
+      <div class="field-card"><span>תאריך לידה</span><strong>${escapeHtml(u.birthDate || "—")}</strong></div>
       <div class="field-card"><span>טלפון</span><strong>${escapeHtml(u.phone || "—")}</strong></div>
       <div class="field-card"><span>מייל</span><strong>${escapeHtml(u.email || "—")}</strong></div>
       <div class="field-card"><span>שכר שעתי</span><strong>${u.hourlyWage ? `₪${u.hourlyWage}` : "—"}</strong></div>
@@ -2846,6 +2986,7 @@ window.openEditEmployeeModal = function(userId) {
       <div class="form-grid">
         <div class="field"><label>שם מלא</label><input id="eu-name" value="${u.fullName}" /></div>
         <div class="field"><label>תעודת זהות</label><input id="eu-id" value="${u.idNumber||""}" /></div>
+        <div class="field"><label>תאריך לידה</label><input type="date" id="eu-birth" value="${u.birthDate || ""}" /></div>
         <div class="field"><label>טלפון</label><input id="eu-phone" value="${u.phone||""}" /></div>
         <div class="field"><label>מייל</label><input type="email" id="eu-email" value="${u.email}" /></div>
         <div class="field"><label>שכר שעתי (₪)</label><input type="number" id="eu-wage" value="${u.hourlyWage||0}" /></div>
@@ -2875,6 +3016,7 @@ window.openEditEmployeeModal = function(userId) {
       await api("PUT", `/api/users/${userId}`, {
         fullName:   document.getElementById("eu-name").value,
         idNumber:   document.getElementById("eu-id").value,
+        birthDate:  document.getElementById("eu-birth").value,
         phone:      document.getElementById("eu-phone").value,
         email:      document.getElementById("eu-email").value,
         hourlyWage: Number(document.getElementById("eu-wage").value),
@@ -5483,7 +5625,7 @@ async function bootstrap() {
       tab.classList.add("active");
       document.getElementById("loginPanel").hidden    = tab.dataset.authTab !== "login";
       document.getElementById("registerPanel").hidden = tab.dataset.authTab !== "register";
-      if (tab.dataset.authTab !== "login") setLoginAsEmployeeVisible(false);
+      resetLoginFlow();
       if (tab.dataset.authTab === "register") loadPublicBranches();
       history.replaceState(null, "", tab.dataset.authTab === "register" ? "#register" : "#login");
     });
@@ -5491,7 +5633,11 @@ async function bootstrap() {
 
   // Auth actions
   document.getElementById("sendCodeBtn").addEventListener("click", sendCode);
-  document.getElementById("loginBtn").addEventListener("click", login);
+  document.getElementById("loginBtn").addEventListener("click", handleLoginPrimaryAction);
+  document.getElementById("loginId").addEventListener("keydown", e => {
+    if (e.key === "Enter") handleLoginPrimaryAction();
+  });
+  bindOtpBoxes();
   document.getElementById("submitRegBtn").addEventListener("click", submitRegistration);
   document.getElementById("logoutBtn").addEventListener("click", logout);
 
@@ -5522,6 +5668,7 @@ async function bootstrap() {
   // Modal close
   document.getElementById("closeModal").addEventListener("click", closeModal);
   document.getElementById("modalBackdrop").addEventListener("click", e => {
+    if (document.getElementById("modalBackdrop")?.classList.contains("modal-required")) return;
     if (e.target.id === "modalBackdrop") closeModal();
   });
 
@@ -5584,6 +5731,7 @@ async function bootstrap() {
         <div class="form-grid">
           <div class="field"><label>שם מלא</label><input id="na-name" /></div>
           <div class="field"><label>תעודת זהות</label><input id="na-id" /></div>
+          <div class="field"><label>תאריך לידה</label><input type="date" id="na-birth" /></div>
           <div class="field"><label>טלפון</label><input id="na-phone" /></div>
           <div class="field"><label>מייל</label><input type="email" id="na-email" /></div>
           <div class="field"><label>שכר שעתי (₪)</label><input type="number" id="na-wage" value="38" /></div>
@@ -5599,6 +5747,7 @@ async function bootstrap() {
         await api("POST", "/api/users/register", {
           fullName: document.getElementById("na-name").value,
           idNumber: document.getElementById("na-id").value,
+          birthDate: document.getElementById("na-birth").value,
           phone:    document.getElementById("na-phone").value,
           email:    document.getElementById("na-email").value,
           hourlyWage: Number(document.getElementById("na-wage").value),
@@ -5665,6 +5814,7 @@ async function bootstrap() {
         <div class="form-grid">
           <div class="field"><label>שם מלא</label><input id="nm-name" /></div>
           <div class="field"><label>תעודת זהות</label><input id="nm-id" /></div>
+          <div class="field"><label>תאריך לידה</label><input type="date" id="nm-birth" /></div>
           <div class="field"><label>מייל</label><input type="email" id="nm-email" /></div>
           <div class="field"><label>טלפון</label><input id="nm-phone" /></div>
           <div class="field full"><label>תפקיד</label>
@@ -5684,6 +5834,7 @@ async function bootstrap() {
         const regRes = await api("POST", "/api/users/register", {
           fullName: document.getElementById("nm-name").value,
           idNumber: document.getElementById("nm-id").value,
+          birthDate: document.getElementById("nm-birth").value,
           email:    document.getElementById("nm-email").value,
           phone:    document.getElementById("nm-phone").value,
         });

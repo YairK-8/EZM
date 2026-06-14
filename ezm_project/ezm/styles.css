@@ -918,6 +918,27 @@ input:disabled, select:disabled, textarea:disabled { opacity: .5; cursor: not-al
 /* OTP row */
 .auth-otp-row { display: flex; gap: 8px; align-items: stretch; }
 .auth-otp-row .auth-input-wrap { flex: 1; }
+.auth-code-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.auth-code-box {
+  height: 56px;
+  border: 1.5px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255,255,255,.78);
+  text-align: center;
+  font: 800 1.35rem/1 Heebo, sans-serif;
+  color: var(--text);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.75), 0 10px 24px rgba(31,41,55,.06);
+}
+.auth-code-box:focus {
+  outline: none;
+  border-color: #F47820;
+  box-shadow: 0 0 0 4px rgba(244,120,32,.12), inset 0 1px 0 rgba(255,255,255,.85);
+}
 .auth-send-code {
   height: 48px;
   padding: 0 16px;
@@ -935,6 +956,7 @@ input:disabled, select:disabled, textarea:disabled { opacity: .5; cursor: not-al
 }
 .auth-send-code:hover { border-color: #F47820; background: rgba(244,120,32,.07); }
 .auth-send-code:disabled { opacity: .6; cursor: not-allowed; }
+.auth-resend-code { width: 100%; }
 #otpInput { direction: ltr; text-align: left; }
 
 /* Remember / Forgot row */
@@ -2306,6 +2328,23 @@ input:disabled, select:disabled, textarea:disabled { opacity: .5; cursor: not-al
 #employeesView .employee-week-stats.is-empty {
   background: rgba(249,115,22,.12);
   color: #c2410c;
+}
+.minor-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 20px;
+  margin-inline-start: 6px;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(244,120,32,.32);
+  background: linear-gradient(135deg, rgba(255,244,232,.96), rgba(255,255,255,.72));
+  color: #f47820;
+  font-size: .68rem;
+  font-weight: 900;
+  vertical-align: middle;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.85), 0 8px 18px rgba(244,120,32,.10);
 }
 #employeesView .employee-detail { padding: 22px; }
 #employeesView .employee-avatar {
@@ -6204,6 +6243,10 @@ body.employee-mode #reportsView .btn {
     inset 0 -14px 32px rgba(244,120,32,.08);
   cursor: pointer;
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
   line-height: 1;
   overflow: visible;
   transition: transform .22s cubic-bezier(.2,.8,.2,1), box-shadow .22s ease, opacity .18s ease;
@@ -6257,6 +6300,9 @@ body.employee-mode #reportsView .btn {
   background: rgba(255,255,255,.56);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.90), 0 10px 24px rgba(31,41,55,.08);
   pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 .tc-fingerprint-core svg {
   width: 34px;
@@ -6264,6 +6310,8 @@ body.employee-mode #reportsView .btn {
   display: block;
   margin: 0;
   pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .tc-live-time {
   font-size: 38px;
