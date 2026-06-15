@@ -5573,6 +5573,23 @@ body.employee-mode #reportsView .btn {
   border-radius: 999px;
 }
 
+/* Keep the employee app navigation pinned to the viewport, including iOS/PWA scroll. */
+body.employee-mode #employeeBottomNav.employee-bottom-nav {
+  position: fixed !important;
+  left: 50% !important;
+  right: auto !important;
+  bottom: calc(12px + env(safe-area-inset-bottom)) !important;
+  width: min(402px, calc(100vw - 56px)) !important;
+  transform: translate3d(-50%, 0, 0) !important;
+  z-index: 3000 !important;
+  margin: 0 !important;
+  will-change: transform;
+}
+
+body.employee-mode {
+  padding-bottom: calc(104px + env(safe-area-inset-bottom));
+}
+
 /* Manager reports glass refresh */
 #reportsView {
   --mgr-page: #eef1f4;
