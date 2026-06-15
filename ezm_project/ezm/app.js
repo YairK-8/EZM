@@ -3911,10 +3911,15 @@ function icsUtcStamp(date = new Date()) {
   return `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}T${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}Z`;
 }
 
+function icsUtcDateTime(date, time) {
+  const local = icsDateTime(date, time).date;
+  return icsUtcStamp(local);
+}
+
 function icsReminderDayBeforeAtSix(eventDate) {
   const reminderDate = new Date(eventDate);
   reminderDate.setDate(reminderDate.getDate() - 1);
-  return icsDateTime(reminderDate, "18:00").value;
+  return icsUtcDateTime(reminderDate, "18:00");
 }
 
 function parseShiftHoursForCalendar(hours = "") {
